@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Season {
+  SPRING
+  SUMMER
+  AUTUMN
+  WINTER
+}
+
+model Station {
+  id        String   @id
+  name      String
+  latitude  Float
+  longitude Float
+  elevation Float?
+  firstYear Int
+  lastYear  Int
+  geom      Unsupported("geography(Point,4326)")
+  createdAt DateTime @default(now())
+
+  observations      DailyObservation[]
+  yearlyAggregates  YearlyAggregate[]
+  seasonalAggregates SeasonalAggregate[]
+}
+
+model DailyObservation {
+  id        String   @id @default(cuid())
+  stationId String
+  date      DateTime
+  tminC     Float?
+  tmaxC     Float?
+
+  station Station @relation(fields: [stationId], references: [id])
+
+  @@unique([stationId, date])
+  @@index([stationId])
+}
+
+model YearlyAggregate {
+  id            String   @id @default(cuid())
+  stationId     String
+  year          Int
+  avgTminC      Float?
+  avgTmaxC      Float?
+  daysCountTmin Int
+  daysCountTmax Int
+
+  station Station @relation(fields: [stationId], references: [id])
+
+  @@unique([stationId, year])
+  @@index([stationId, year])
+}
+
+model SeasonalAggregate {
+  id            String   @id @default(cuid())
+  stationId     String
+  year          Int
+  season        Season
+  avgTminC      Float?
+  avgTmaxC      Float?
+  daysCountTmin Int
+  daysCountTmax Int
+
+  station Station @relation(fields: [stationId], references: [id])
+
+  @@unique([stationId, year, season])
+  @@index([stationId, year, season])
+}
