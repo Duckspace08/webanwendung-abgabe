@@ -9,6 +9,7 @@ RUN apt-get update && \
 RUN corepack enable
 
 COPY package.json pnpm-workspace.yaml ./
+COPY tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY prisma ./prisma
