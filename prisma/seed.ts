@@ -173,9 +173,9 @@ const seed = async () => {
     });
   });
 
-  await prisma.dailyObservation.createMany({ data: dailyRows });
-  await prisma.yearlyAggregate.createMany({ data: yearlyRows });
-  await prisma.seasonalAggregate.createMany({ data: seasonalRows });
+  await prisma.dailyObservation.createMany({ data: dailyRows, skipDuplicates: true });
+  await prisma.yearlyAggregate.createMany({ data: yearlyRows, skipDuplicates: true });
+  await prisma.seasonalAggregate.createMany({ data: seasonalRows, skipDuplicates: true });
 };
 
 seed()

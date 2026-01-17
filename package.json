@@ -16,6 +16,7 @@
     "e2e": "playwright test"
   },
   "devDependencies": {
+    "@webanwendung/shared": "workspace:*",
     "@playwright/test": "^1.48.2",
     "@prisma/client": "^5.14.0",
     "@types/node": "^20.11.30",
