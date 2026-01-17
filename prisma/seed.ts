@@ -106,7 +106,7 @@ const seed = async () => {
           tmaxC: tmax,
         });
 
-        const yearKey = `${station.id}-${year}`;
+        const yearKey = `${station.id}::${year}`;
         const yearly = yearlyMap.get(yearKey) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
         if (typeof tmin === 'number') {
           yearly.tminSum += tmin;
@@ -120,7 +120,7 @@ const seed = async () => {
 
         const month = date.getUTCMonth() + 1;
         const { season, seasonYear } = getSeasonForMonth(year, month);
-        const seasonKey = `${station.id}-${seasonYear}-${season}`;
+        const seasonKey = `${station.id}::${seasonYear}::${season}`;
         const seasonal = seasonalMap.get(seasonKey) ?? {
           tminSum: 0,
           tminCount: 0,
@@ -146,7 +146,7 @@ const seed = async () => {
   const seasonalRows: Prisma.SeasonalAggregateCreateManyInput[] = [];
 
   yearlyMap.forEach((value, key) => {
-    const [stationId, yearString] = key.split('-');
+    const [stationId, yearString] = key.split('::');
     const year = Number(yearString);
     yearlyRows.push({
       id: randomUUID(),
@@ -160,7 +160,7 @@ const seed = async () => {
   });
 
   seasonalMap.forEach((value, key) => {
-    const [stationId] = key.split('-');
+    const [stationId] = key.split('::');
     seasonalRows.push({
       id: randomUUID(),
       stationId,
@@ -173,9 +173,9 @@ const seed = async () => {
     });
   });
 
-  await prisma.dailyObservation.createMany({ data: dailyRows });
-  await prisma.yearlyAggregate.createMany({ data: yearlyRows });
-  await prisma.seasonalAggregate.createMany({ data: seasonalRows });
+  await prisma.dailyObservation.createMany({ data: dailyRows, skipDuplicates: true });
+  await prisma.yearlyAggregate.createMany({ data: yearlyRows, skipDuplicates: true });
+  await prisma.seasonalAggregate.createMany({ data: seasonalRows, skipDuplicates: true });
 };
 
 seed()
