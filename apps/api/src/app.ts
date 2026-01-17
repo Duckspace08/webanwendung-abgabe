@@ -7,7 +7,7 @@ import { LRUCache } from 'lru-cache';
 import { prisma } from './db.js';
 import pkg from '../package.json' assert { type: 'json' };
 
-const cache = new LRUCache<string, unknown>({
+const cache = new LRUCache<string, object>({
   max: 500,
   ttl: 1000 * 60 * 10,
 });
