@@ -29,6 +29,30 @@ export const buildApp = () => {
     version: pkg.version,
   }));
 
+
+  app.get('/api/import/status', async (_request, reply) => {
+    const meta = await prisma.seedMeta.findUnique({ where: { key: 'noaa_ghcn_daily' } });
+    if (!meta) {
+      return reply.send({
+        key: 'noaa_ghcn_daily',
+        status: 'NOT_STARTED',
+        endYear: Number(process.env.NOAA_END_YEAR || 2025),
+        startedAt: null,
+        completedAt: null,
+        error: null,
+      });
+    }
+
+    return {
+      key: meta.key,
+      status: meta.status,
+      endYear: meta.endYear,
+      startedAt: meta.startedAt,
+      completedAt: meta.completedAt,
+      error: meta.error,
+    };
+  });
+
   app.get('/api/stations/nearby', async (request, reply) => {
     try {
       const params = nearbyStationsQuerySchema.parse(request.query);

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { fetchNearbyStations, type StationResult } from '../../lib/api';
+import { fetchImportStatus, fetchNearbyStations, type StationResult } from '../../lib/api';
 
 const StationMap = dynamic(
   () => import('../../components/StationMap').then((mod) => mod.StationMap),
@@ -17,13 +17,19 @@ const defaultParams = {
   radiusKm: 500,
   limit: 10,
   minYear: 2018,
-  maxYear: 2024,
+  maxYear: 2025,
 };
 
 export default function ExplorePage() {
   const [params, setParams] = useState(defaultParams);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shouldFetch, setShouldFetch] = useState(false);
+
+  const { data: importStatus } = useQuery({
+    queryKey: ['import-status'],
+    queryFn: fetchImportStatus,
+    refetchInterval: 10000,
+  });
 
   const { data, isLoading, error, refetch } = useQuery<StationResult[]>({
     queryKey: ['stations', params],
@@ -39,6 +45,12 @@ export default function ExplorePage() {
 
   return (
     <section className="grid gap-8">
+      {importStatus?.status === 'RUNNING' && (
+        <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-amber-200">
+          NOAA Initialimport läuft noch. Ergebnisse werden nach Abschluss vollständig verfügbar.
+        </p>
+      )}
+
       <form
         onSubmit={handleSubmit}
         className="grid gap-6 rounded-3xl border border-slate-800 bg-slate-900/60 p-8"

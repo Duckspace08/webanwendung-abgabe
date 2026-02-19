@@ -9,11 +9,30 @@ services:
       POSTGRES_DB: ghcn
     ports:
       - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  importer:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/ghcn?schema=public
+      NOAA_IMPORT_ENABLED: ${NOAA_IMPORT_ENABLED:-1}
+      NOAA_IMPORT_FORCE: ${NOAA_IMPORT_FORCE:-0}
+      NOAA_END_YEAR: ${NOAA_END_YEAR:-2025}
+      NOAA_CACHE_DIR: /data/noaa-cache
+    command: ["sh", "-c", "pnpm prisma migrate deploy && node apps/api/dist/importer/noaa.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - noaa_cache:/data/noaa-cache
 
   api:
     build:
@@ -23,11 +42,14 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/ghcn?schema=public
       WEB_ORIGIN: http://localhost:3000
       NODE_ENV: production
+      NOAA_END_YEAR: ${NOAA_END_YEAR:-2025}
     ports:
       - "3001:3001"
     depends_on:
-      db:
-        condition: service_healthy
+      importer:
+        condition: service_completed_successfully
+    volumes:
+      - noaa_cache:/data/noaa-cache
     healthcheck:
       test:
         [
@@ -50,3 +72,7 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  db_data:
+  noaa_cache:

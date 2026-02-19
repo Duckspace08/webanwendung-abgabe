@@ -20,4 +20,4 @@ RUN pnpm --filter @webanwendung/shared build
 RUN pnpm --filter @webanwendung/api build
 
 EXPOSE 3001
-CMD ["sh", "-c", "pnpm prisma migrate deploy && pnpm prisma db seed && node apps/api/dist/server.js"]
+CMD ["node", "apps/api/dist/server.js"]
