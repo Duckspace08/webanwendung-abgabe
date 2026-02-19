@@ -17,6 +17,7 @@
     "@fastify/cors": "^9.0.1",
     "@prisma/client": "^5.14.0",
     "@webanwendung/shared": "workspace:*",
+    "dotenv": "^17.3.1",
     "fastify": "^4.26.2",
     "lru-cache": "^10.2.2",
     "pino": "^8.20.0",
