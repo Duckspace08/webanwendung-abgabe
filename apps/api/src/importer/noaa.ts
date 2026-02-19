@@ -42,9 +42,13 @@ const toFixedNumber = (value: number | null) => (value === null ? null : Number(
 const ensureDir = async (dir: string) => fs.promises.mkdir(dir, { recursive: true });
 
 const toNodeReadable = (webStream: unknown): NodeJS.ReadableStream => {
+  if (!webStream) {
+    throw new TypeError('Expected a web ReadableStream but got null/undefined');
+  }
+
   // TS/DOM typings can differ (ReadableStream<Uint8Array<ArrayBufferLike>> vs ReadableStream<Uint8Array>).
-  // Runtime is compatible; normalize via safe cast for Readable.fromWeb().
-  return Readable.fromWeb(webStream as any) as unknown as NodeJS.ReadableStream;
+  // Runtime is compatible; normalize via cast without using `any`.
+  return Readable.fromWeb(webStream as unknown as ReadableStream<Uint8Array>) as unknown as NodeJS.ReadableStream;
 };
 
 const downloadWithCache = async (fileName: string) => {
