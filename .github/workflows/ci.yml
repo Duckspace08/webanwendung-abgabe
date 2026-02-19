@@ -2,47 +2,61 @@ name: CI
 
 on:
   push:
+    branches: ["**"]
   pull_request:
 
 jobs:
-  build-test:
+  ci:
     runs-on: ubuntu-latest
+
     services:
       db:
-        image: postgis/postgis:16-3.4
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ghcn
+        # PostGIS, weil ihr PostGIS im Canvas/Stack habt
+        image: postgis/postgis:15-3.4
         ports:
           - 5432:5432
+        env:
+          POSTGRES_USER: ghcn
+          POSTGRES_PASSWORD: ghcn
+          POSTGRES_DB: ghcn
         options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
+          --health-cmd "pg_isready -U ghcn -d ghcn"
+          --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ghcn?schema=public
-      WEB_ORIGIN: http://localhost:3000
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
-      NOAA_IMPORT_ENABLED: 0
+      # Prisma braucht DATABASE_URL im Prozess (Vitest lädt keine .env in CI)
+      DATABASE_URL: postgresql://ghcn:ghcn@localhost:5432/ghcn?schema=public
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'pnpm'
-      - name: Enable corepack
-        run: corepack enable
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9"
+
       - name: Install dependencies
-        run: pnpm install
-      - name: Run migrations
-        run: pnpm prisma migrate deploy
-      - name: Seed database
-        run: pnpm prisma db seed
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma migrate + seed
+        run: |
+          pnpm prisma migrate deploy
+          pnpm prisma db seed
+
       - name: Lint
         run: pnpm lint
-      - name: Test + coverage
-        run: pnpm test:coverage
+
+      - name: Test
+        run: pnpm test
+
       - name: Build
         run: pnpm build
