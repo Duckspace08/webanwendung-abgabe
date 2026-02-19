@@ -21,6 +21,14 @@ describe('API integration', () => {
     expect(response.body.status).toBe('ok');
   });
 
+
+  it('returns import status', async () => {
+    const response = await request(app.server).get('/api/import/status');
+    expect(response.status).toBe(200);
+    expect(response.body.key).toBe('noaa_ghcn_daily');
+    expect(response.body.endYear).toBeDefined();
+  });
+
   it('returns nearby stations', async () => {
     const response = await request(app.server)
       .get('/api/stations/nearby')

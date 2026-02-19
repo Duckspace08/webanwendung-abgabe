@@ -13,7 +13,7 @@ export default function StationPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const initialFrom = Number(searchParams.get('fromYear') ?? 2018);
-  const initialTo = Number(searchParams.get('toYear') ?? 2024);
+  const initialTo = Number(searchParams.get('toYear') ?? 2025);
 
   const [fromYear, setFromYear] = useState(initialFrom);
   const [toYear, setToYear] = useState(initialTo);
