@@ -14,7 +14,6 @@ jobs:
 
     services:
       db:
-        # PostGIS, weil ihr PostGIS im Canvas/Stack habt
         image: postgis/postgis:15-3.4
         env:
           POSTGRES_USER: ghcn
@@ -29,8 +28,6 @@ jobs:
           - 5432:5432
 
     env:
-      # Prisma braucht DATABASE_URL im Prozess (Vitest lädt keine .env in CI)
-      # localhost ist ok, weil wir den DB-Service-Port auf den Runner mappen
       DATABASE_URL: postgresql://ghcn:ghcn@localhost:5432/ghcn?schema=public
 
     steps:
@@ -42,7 +39,7 @@ jobs:
         with:
           node-version: "20"
 
-      # Wichtig: KEINE Version hier angeben, wenn im package.json bereits "packageManager": "pnpm@x.y.z" steht.
+      # Keine Version angeben, wenn im Root package.json bereits "packageManager": "pnpm@x.y.z" steht.
       # Sonst: "Multiple versions of pnpm specified"
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -62,6 +59,10 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # WICHTIG: Seed importiert @webanwendung/shared -> braucht dist/*
+      - name: Build shared (required for prisma seed)
+        run: pnpm --filter ./packages/shared build
 
       - name: Prisma migrate + seed
         run: |
