@@ -40,7 +40,6 @@ jobs:
           node-version: "20"
 
       # Keine Version angeben, wenn im Root package.json bereits "packageManager": "pnpm@x.y.z" steht.
-      # Sonst: "Multiple versions of pnpm specified"
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
@@ -60,14 +59,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # WICHTIG: Seed importiert @webanwendung/shared -> braucht dist/*
+      # Seed nutzt @webanwendung/shared -> dist muss existieren
       - name: Build shared (required for prisma seed)
         run: pnpm --filter ./packages/shared build
 
+      # WICHTIG: Prisma Client generieren, sonst fehlt .prisma/client/*
+      - name: Prisma generate
+        run: pnpm prisma generate --schema prisma/schema.prisma
+
       - name: Prisma migrate + seed
         run: |
-          pnpm prisma migrate deploy
-          pnpm prisma db seed
+          pnpm prisma migrate deploy --schema prisma/schema.prisma
+          pnpm prisma db seed --schema prisma/schema.prisma
 
       - name: Lint
         run: pnpm lint
