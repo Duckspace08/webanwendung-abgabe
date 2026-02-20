@@ -20,12 +20,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # WICHTIG: PAT statt GITHUB_TOKEN (um write_package zuverlässig zu umgehen)
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Docker meta (api)
         id: meta_api
