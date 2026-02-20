@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -13,8 +16,6 @@ jobs:
       db:
         # PostGIS, weil ihr PostGIS im Canvas/Stack habt
         image: postgis/postgis:15-3.4
-        ports:
-          - 5432:5432
         env:
           POSTGRES_USER: ghcn
           POSTGRES_PASSWORD: ghcn
@@ -24,9 +25,12 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+        ports:
+          - 5432:5432
 
     env:
       # Prisma braucht DATABASE_URL im Prozess (Vitest lädt keine .env in CI)
+      # localhost ist ok, weil wir den DB-Service-Port auf den Runner mappen
       DATABASE_URL: postgresql://ghcn:ghcn@localhost:5432/ghcn?schema=public
 
     steps:
@@ -38,14 +42,15 @@ jobs:
         with:
           node-version: "20"
 
+      # Wichtig: KEINE Version hier angeben, wenn im package.json bereits "packageManager": "pnpm@x.y.z" steht.
+      # Sonst: "Multiple versions of pnpm specified"
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: "9"
 
       - name: Get pnpm store path
         id: pnpm-cache
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
         uses: actions/cache@v4
@@ -53,7 +58,7 @@ jobs:
           path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-pnpm- 
+            ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
