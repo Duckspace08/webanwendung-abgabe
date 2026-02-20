@@ -20,7 +20,7 @@ Client-Server-Webanwendung zur Suche und Visualisierung von NOAA **GHCN Daily** 
 * [CI/CD](#cicd)
 * [Projektstruktur](#projektstruktur)
 * [Troubleshooting](#troubleshooting)
-* [Architekturentscheidungen (ADRs)](#architekturentscheidungen-adrs)
+* [Dokumentation](#dokumentation)
 
 ---
 
@@ -222,13 +222,18 @@ docker compose up --build
 
 ---
 
-## Architekturentscheidungen (ADRs)
+## Dokumentation
 
-* ADR 0001: Tech Stack
-* ADR 0002: NOAA Initialimport bis 2025 + Offline danach
-* ADR 0003: PostGIS
-* ADR 0004: Voraggregation Year/Season
-* ADR 0005: Caching-Strategie
+- **Architecture Communication Canvas**: [docs/architecture-communication-canvas.md](docs/architecture-communication-canvas.md)
+- **Canvas (PNG)**: [docs/architecture-communication-canvas.png](docs/architecture-communication-canvas.png)
+- **ADRs**:
+  - [0001 Tech Stack](docs/adr/0001-tech-stack.md)
+  - [0002 NOAA Initialimport bis 2025 + Offline](docs/adr/0002-offline-demo-dataset.md)
+  - [0003 PostGIS statt Elasticsearch](docs/adr/0003-postgis-over-elasticsearch.md)
+  - [0004 Voraggregation Year/Season](docs/adr/0004-preaggregation-year-season.md)
+  - [0005 Caching-Strategie](docs/adr/0005-caching-strategy.md)
+
+![Architecture Communication Canvas](docs/architecture-communication-canvas.png)
 
 ---
 
