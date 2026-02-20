@@ -38,7 +38,7 @@ const stations = [
 ];
 
 const startYear = 2015;
-const endYear = 2024;
+const endYear = 2025;
 
 const gaussianNoise = () => {
   let u = 0;
