@@ -13,13 +13,14 @@
     "format": "pnpm -r format",
     "test": "pnpm -r test",
     "test:coverage": "pnpm -r test:coverage",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "perf": "node tools/perf/perf.mjs"
   },
   "devDependencies": {
-    "@webanwendung/shared": "workspace:*",
     "@playwright/test": "^1.48.2",
     "@prisma/client": "^5.14.0",
     "@types/node": "^20.11.30",
+    "@webanwendung/shared": "workspace:*",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
     "prisma": "^5.14.0",
