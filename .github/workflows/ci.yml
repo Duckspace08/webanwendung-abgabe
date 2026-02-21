@@ -78,5 +78,18 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Test Coverage
+        run: pnpm test:coverage
+
+      - name: Upload coverage report (HTML + lcov)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          if-no-files-found: error
+          path: |
+            apps/api/coverage
+            apps/web/coverage
+            packages/shared/coverage
+
       - name: Build
         run: pnpm build
