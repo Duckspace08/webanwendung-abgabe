@@ -15,10 +15,12 @@ Client-Server-Webanwendung zur Suche und Visualisierung von NOAA **GHCN Daily** 
 * [Installation (Docker über GHCR)](#installation-docker-über-ghcr)
 * [Konfiguration (Environment Variablen)](#konfiguration-environment-variablen)
 * [Lokale Entwicklung](#lokale-entwicklung)
-* [Tests & Quality Gates](#tests--quality-gates)
+* [Performance-/Load-Test](#performanceload-test)
+* [Testabdeckung](#testabdeckung)
+* [Caching-Strategie (TTL, Key-Design)](#caching-strategie-ttl-key-design)
 * [API Endpoints (Auszug)](#api-endpoints-auszug)
 * [CI/CD](#cicd)
-* [Projektstruktur](#projektstruktur)
+* [Projektstruktur](#projektstruktur-monorepo)
 * [Troubleshooting](#troubleshooting)
 * [Dokumentation](#dokumentation)
 
@@ -111,6 +113,12 @@ Die wichtigsten Variablen werden über `.env` gesetzt bzw. im Compose weitergere
 ### API / DB
 
 * `DATABASE_URL` – Prisma/DB-Connection-String
+* `WEB_ORIGIN` – CORS Origin
+
+### API Cache (LRU)
+
+* `CACHE_TTL_MINUTES` – TTL in Minuten (Default: `10`)
+* `CACHE_MAX_ENTRIES` – max. Einträge (Default: `500`)
 
 ### Importer (NOAA)
 
@@ -144,13 +152,127 @@ pnpm dev
 
 ---
 
-## Tests & Quality Gates
+## Performance-/Load-Test
+
+### Ziel
+
+Ein reproduzierbarer Performance-/Load-Test validiert die **Kernendpunkte** gegen die gleiche Testdatenbasis wie in CI (Minimal-Seed):
+
+* `GET /api/stations/nearby`
+* `GET /api/stations/:id/aggregates`
+
+Das Skript gibt messbare Kennzahlen aus (**avg**, **p90**, **p95**).
+
+### Run-Befehl
 
 ```bash
-pnpm lint
-pnpm test
-pnpm build
+pnpm perf
 ```
+
+### Voraussetzungen
+
+* API läuft lokal (Default: `http://localhost:3001`)
+* DB ist migriert und befüllt:
+
+  * `pnpm prisma migrate deploy`
+  * `pnpm prisma db seed`
+
+### Parameter / Testdatenbasis
+
+Das Skript nutzt „typische“ Parameter und eine Seed-Station (Standard: `DE-001`). Details zur Datenbasis siehe: `docs/seed.md`.
+
+### Konfiguration (optional)
+
+* `PERF_BASE_URL` (Default: `http://localhost:3001`)
+* `PERF_CONNECTIONS` (Default: `20`)
+* `PERF_DURATION_SECONDS` (Default: `15`)
+* `PERF_WARMUP_SECONDS` (Default: `5`)
+
+### Gemessene Ergebnisse
+
+> Hinweis: Bitte nach dem ersten Lauf `pnpm perf` die Messwerte hier eintragen.
+> In CI/Abnahme muss nachvollziehbar dokumentiert sein, dass die Kernfunktionen die Zielwerte einhalten.
+
+Beispiel-Format (einzutragen):
+
+| Endpoint                       | avg (ms) | p90 (ms) | p95 (ms) | Ziel      | Erfüllt |
+| ------------------------------ | -------: | -------: | -------: | --------- | ------- |
+| `/api/stations/nearby`         |     TODO |     TODO |     TODO | < 3000 ms | TODO    |
+| `/api/stations/:id/aggregates` |     TODO |     TODO |     TODO | < 3000 ms | TODO    |
+
+---
+
+## Testabdeckung
+
+### Ausführung
+
+* Tests:
+
+```bash
+pnpm test
+```
+
+* Coverage:
+
+```bash
+pnpm test:coverage
+```
+
+### Coverage-Reports
+
+Vitest erzeugt pro Package einen Coverage-Report unter:
+
+* `packages/shared/coverage/`
+* `apps/api/coverage/`
+* `apps/web/coverage/`
+
+### CI
+
+Der CI-Workflow führt **zusätzlich** zu `pnpm test` auch `pnpm test:coverage` aus und lädt den HTML/lcov-Report als Artifact **coverage-report** hoch.
+
+### Aktuelle Coverage-Kennzahl
+
+> Hinweis: Bitte die Kennzahl nach einem `pnpm test:coverage` Lauf aktualisieren.
+
+* Gesamt (Lines): **TODO%**
+
+---
+
+## Caching-Strategie (TTL, Key-Design)
+
+Die Anwendung nutzt zwei Cache-Ebenen mit klarer Abgrenzung:
+
+### 1) API-LRU-Cache (Server-Side)
+
+**Welche Endpunkte werden gecached?**
+
+* `GET /api/stations/nearby`
+* `GET /api/stations/:id/aggregates`
+
+**TTL und Parameter**
+
+* TTL: **10 Minuten** (`CACHE_TTL_MINUTES`, Default `10`)
+* Max Entries: `CACHE_MAX_ENTRIES` (Default `500`)
+
+**Key-Design**
+
+* Nearby: `nearby:<stable-json(query-params)>`
+* Aggregates: `aggregate:<stationId>:<stable-json(query-params)>`
+
+Dabei werden Query-Parameter stabil serialisiert (Keys alphabetisch sortiert), um Cache-Misses durch unterschiedliche Key-Reihenfolge zu vermeiden.
+
+### 2) Frontend React-Query Cache (Client-Side)
+
+* React Query cached HTTP-Responses clientseitig basierend auf `queryKey`.
+* Default-Konfiguration (siehe `apps/web/components/Providers.tsx`):
+
+  * `staleTime = 60s`
+  * `retry = 1`
+
+**Abgrenzung**
+
+* **API-LRU-Cache** reduziert DB-Last und garantiert schnelle Antworten auch bei mehreren Clients.
+* **React-Query-Cache** verbessert UX (weniger Refetches, schnelle Navigation), ersetzt aber nicht den API-Cache.
 
 ---
 
@@ -167,27 +289,38 @@ pnpm build
 
 ### CI
 
-Der CI-Workflow führt aus:
+Der CI-Workflow (`.github/workflows/ci.yml`) führt aus:
 
 * Install
-* Prisma migrate + seed
+* Prisma migrate + seed (Minimal-Seed)
 * Lint
 * Test
+* Coverage (Artifact Upload)
 * Build
 
 Hinweis: CI bleibt bewusst schnell und nutzt das Minimal-Seed; der NOAA-Import wird dort nicht ausgeführt.
 
 ### Container Images (GHCR)
 
-Für `main` werden Images gebaut und nach GHCR gepusht:
+Der Image-Workflow (`.github/workflows/images.yml`) baut und pusht Images bei:
+
+* `push` auf `main`
+* `push` von Tags `v*.*.*`
+
+Images:
 
 * `ghcr.io/<owner>/<repo>-api`
 * `ghcr.io/<owner>/<repo>-web`
 
-Tags:
+Tagging:
 
 * `latest`
-* `sha-<commit>`
+* `sha-<commit>` (eindeutig rückverfolgbar)
+
+**Verifikation (Prüfer)**
+
+* GitHub Repository → **Packages** → gewünschtes Image auswählen
+* Prüfen, dass sowohl `latest` als auch `sha-...` Tags vorhanden sind.
 
 ---
 
@@ -197,6 +330,8 @@ Tags:
 * `apps/web` – Next.js Frontend
 * `packages/shared` – Shared Types/Logic
 * `prisma` – Schema, Migrations, Seed
+* `tests` – Playwright E2E (Smoke)
+* `tools/perf` – Performance-/Load-Test (`pnpm perf`)
 
 ---
 
@@ -224,14 +359,17 @@ docker compose up --build
 
 ## Dokumentation
 
-- **Architecture Communication Canvas**: [docs/architecture-communication-canvas.md](docs/architecture-communication-canvas.md)
-- **Canvas (PNG)**: [docs/architecture-communication-canvas.png](docs/architecture-communication-canvas.png)
-- **ADRs**:
-  - [0001 Tech Stack](docs/adr/0001-tech-stack.md)
-  - [0002 NOAA Initialimport bis 2025 + Offline](docs/adr/0002-offline-demo-dataset.md)
-  - [0003 PostGIS statt Elasticsearch](docs/adr/0003-postgis-over-elasticsearch.md)
-  - [0004 Voraggregation Year/Season](docs/adr/0004-preaggregation-year-season.md)
-  - [0005 Caching-Strategie](docs/adr/0005-caching-strategy.md)
+* **Architecture Communication Canvas**: `docs/architecture-communication-canvas.md`
+* **Canvas (PNG)**: `docs/architecture-communication-canvas.png`
+* **Teststrategie**: `docs/test-strategy.md`
+* **Minimal-Seed**: `docs/seed.md`
+* **ADRs**:
+
+  * `docs/adr/0001-tech-stack.md`
+  * `docs/adr/0002-offline-demo-dataset.md`
+  * `docs/adr/0003-postgis-over-elasticsearch.md`
+  * `docs/adr/0004-preaggregation-year-season.md`
+  * `docs/adr/0005-caching-strategy.md`
 
 ![Architecture Communication Canvas](docs/architecture-communication-canvas.png)
 
