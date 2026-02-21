@@ -1,3 +1,5 @@
+import { parseApiError } from './errors';
+
 const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
 export type StationResult = {
@@ -39,6 +41,20 @@ export type ImportStatusResponse = {
   error: string | null;
 };
 
+const apiFetch = async <T>(url: URL): Promise<T> => {
+  const response = await fetch(url.toString(), {
+    headers: {
+      accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw await parseApiError(response);
+  }
+
+  return response.json() as Promise<T>;
+};
+
 export const fetchNearbyStations = async (params: {
   lat: number;
   lon: number;
@@ -49,11 +65,7 @@ export const fetchNearbyStations = async (params: {
 }): Promise<StationResult[]> => {
   const url = new URL('/api/stations/nearby', baseUrl);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error('Failed to load stations');
-  }
-  return response.json();
+  return apiFetch<StationResult[]>(url);
 };
 
 export const fetchAggregates = async (
@@ -65,17 +77,10 @@ export const fetchAggregates = async (
 ): Promise<AggregateResponse> => {
   const url = new URL(`/api/stations/${stationId}/aggregates`, baseUrl);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
-  const response = await fetch(url.toString());
-  if (!response.ok) {
-    throw new Error('Failed to load aggregates');
-  }
-  return response.json();
+  return apiFetch<AggregateResponse>(url);
 };
 
 export const fetchImportStatus = async (): Promise<ImportStatusResponse> => {
-  const response = await fetch(new URL('/api/import/status', baseUrl).toString());
-  if (!response.ok) {
-    throw new Error('Failed to load import status');
-  }
-  return response.json();
+  const url = new URL('/api/import/status', baseUrl);
+  return apiFetch<ImportStatusResponse>(url);
 };
