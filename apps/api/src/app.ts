@@ -7,14 +7,41 @@ import { LRUCache } from 'lru-cache';
 import { prisma } from './db.js';
 import pkg from '../package.json' assert { type: 'json' };
 
-const cache = new LRUCache<string, object>({
-  max: 500,
-  ttl: 1000 * 60 * 10,
+const readPositiveIntEnv = (key: string, fallback: number) => {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
+};
+
+/**
+ * API-LRU-Cache (Server-Side)
+ *
+ * Konfigurierbar per Environment:
+ * - CACHE_TTL_MINUTES (Default: 10)
+ * - CACHE_MAX_ENTRIES (Default: 500)
+ */
+const cacheTtlMinutes = readPositiveIntEnv('CACHE_TTL_MINUTES', 10);
+const cacheMaxEntries = readPositiveIntEnv('CACHE_MAX_ENTRIES', 500);
+
+const cache = new LRUCache<string, unknown>({
+  max: cacheMaxEntries,
+  ttl: 1000 * 60 * cacheTtlMinutes,
 });
 
 const buildErrorResponse = (code: string, message: string, details?: unknown) => ({
   error: { code, message, details },
 });
+
+const stableKey = (prefix: string, obj: Record<string, unknown>) => {
+  const keys = Object.keys(obj).sort();
+  const stable = keys.reduce<Record<string, unknown>>((acc, key) => {
+    acc[key] = obj[key];
+    return acc;
+  }, {});
+  return `${prefix}:${JSON.stringify(stable)}`;
+};
 
 export const buildApp = () => {
   const app = Fastify({ logger: true });
@@ -28,7 +55,6 @@ export const buildApp = () => {
     time: new Date().toISOString(),
     version: pkg.version,
   }));
-
 
   app.get('/api/import/status', async (_request, reply) => {
     const meta = await prisma.seedMeta.findUnique({ where: { key: 'noaa_ghcn_daily' } });
@@ -56,7 +82,7 @@ export const buildApp = () => {
   app.get('/api/stations/nearby', async (request, reply) => {
     try {
       const params = nearbyStationsQuerySchema.parse(request.query);
-      const cacheKey = `nearby:${JSON.stringify(params)}`;
+      const cacheKey = stableKey('nearby', params);
       const cached = cache.get(cacheKey);
       if (cached) {
         return cached;
@@ -124,7 +150,7 @@ export const buildApp = () => {
 
     try {
       const params = aggregatesQuerySchema.parse(request.query);
-      const cacheKey = `aggregate:${stationId}:${JSON.stringify(params)}`;
+      const cacheKey = stableKey(`aggregate:${stationId}`, params);
       const cached = cache.get(cacheKey);
       if (cached) {
         return cached;
@@ -132,9 +158,7 @@ export const buildApp = () => {
 
       const station = await prisma.station.findUnique({ where: { id: stationId } });
       if (!station) {
-        return reply
-          .status(404)
-          .send(buildErrorResponse('NOT_FOUND', 'Station not found'));
+        return reply.status(404).send(buildErrorResponse('NOT_FOUND', 'Station not found'));
       }
 
       const yearly = await prisma.yearlyAggregate.findMany({

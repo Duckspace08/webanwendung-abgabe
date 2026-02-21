@@ -41,6 +41,8 @@ services:
       WEB_ORIGIN: http://localhost:3000
       NODE_ENV: production
       NOAA_END_YEAR: ${NOAA_END_YEAR:-2025}
+      CACHE_TTL_MINUTES: ${CACHE_TTL_MINUTES:-10}
+      CACHE_MAX_ENTRIES: ${CACHE_MAX_ENTRIES:-500}
     ports:
       - "3001:3001"
     depends_on:
