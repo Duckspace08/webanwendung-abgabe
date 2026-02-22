@@ -25,7 +25,9 @@ const readPositiveIntEnv = (key: string, fallback: number) => {
 const cacheTtlMinutes = readPositiveIntEnv('CACHE_TTL_MINUTES', 10);
 const cacheMaxEntries = readPositiveIntEnv('CACHE_MAX_ENTRIES', 500);
 
-const cache = new LRUCache<string, unknown>({
+// lru-cache verlangt: V extends {}
+// => unknown ist NICHT erlaubt, object ist ok (Arrays sind ebenfalls object).
+const cache = new LRUCache<string, object>({
   max: cacheMaxEntries,
   ttl: 1000 * 60 * cacheTtlMinutes,
 });
@@ -83,6 +85,7 @@ export const buildApp = () => {
     try {
       const params = nearbyStationsQuerySchema.parse(request.query);
       const cacheKey = stableKey('nearby', params);
+
       const cached = cache.get(cacheKey);
       if (cached) {
         return cached;
@@ -130,7 +133,7 @@ export const buildApp = () => {
         distanceKm: Math.round(row.distancekm * 10) / 10,
       }));
 
-      cache.set(cacheKey, response);
+      cache.set(cacheKey, response as unknown as object);
       return response;
     } catch (error) {
       if (error instanceof ZodError) {
@@ -151,6 +154,7 @@ export const buildApp = () => {
     try {
       const params = aggregatesQuerySchema.parse(request.query);
       const cacheKey = stableKey(`aggregate:${stationId}`, params);
+
       const cached = cache.get(cacheKey);
       if (cached) {
         return cached;
@@ -184,7 +188,7 @@ export const buildApp = () => {
       });
 
       const response = { station, yearly, seasonal };
-      cache.set(cacheKey, response);
+      cache.set(cacheKey, response as unknown as object);
       return response;
     } catch (error) {
       if (error instanceof ZodError) {
@@ -205,9 +209,7 @@ export const buildApp = () => {
         .status(400)
         .send(buildErrorResponse('INVALID_PARAMS', 'Invalid query parameters', error.issues));
     }
-    return reply
-      .status(500)
-      .send(buildErrorResponse('INTERNAL_ERROR', 'Unexpected server error'));
+    return reply.status(500).send(buildErrorResponse('INTERNAL_ERROR', 'Unexpected server error'));
   });
 
   return app;

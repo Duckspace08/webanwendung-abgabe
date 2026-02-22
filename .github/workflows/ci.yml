@@ -24,10 +24,12 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+        ports:
+          - 5432:5432
 
     env:
-      # Wichtig: Hostname = Service-Name "db" (nicht localhost)
-      DATABASE_URL: postgresql://ghcn:ghcn@db:5432/ghcn?schema=public
+      # Job läuft auf Host (VM) -> Service via localhost + published port erreichbar
+      DATABASE_URL: postgresql://ghcn:ghcn@localhost:5432/ghcn?schema=public
 
     steps:
       - name: Checkout
@@ -56,6 +58,17 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Wait for DB port
+        shell: bash
+        run: |
+          for i in {1..30}; do
+            (echo > /dev/tcp/127.0.0.1/5432) >/dev/null 2>&1 && echo "DB port is open" && exit 0
+            echo "Waiting for DB..."
+            sleep 2
+          done
+          echo "DB did not become ready in time"
+          exit 1
 
       - name: Build shared (required for prisma seed)
         run: pnpm --filter ./packages/shared build
