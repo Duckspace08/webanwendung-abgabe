@@ -39,6 +39,8 @@ jobs:
 
       - name: Build & Push (api)
         uses: docker/build-push-action@v6
+        env:
+          BUILDKIT_PROGRESS: plain
         with:
           context: .
           file: apps/api/Dockerfile
@@ -60,6 +62,8 @@ jobs:
 
       - name: Build & Push (web)
         uses: docker/build-push-action@v6
+        env:
+          BUILDKIT_PROGRESS: plain
         with:
           context: .
           file: apps/web/Dockerfile
