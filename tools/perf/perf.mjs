@@ -173,7 +173,7 @@ async function main() {
   )}`;
   await runEndpoint(`GET /api/stations/:id/aggregates (id=${stationId})`, aggregatesUrl);
 
-  console.log('\nHinweis: Die Ausgabe enthält avg/p90/p95. Dokumentieren Sie die Messwerte in README.md (Abschnitt Performance).');
+  console.log('\nHinweis: Die Ausgabe enthält avg/p90/p95.');
 }
 
 main().catch((error) => {

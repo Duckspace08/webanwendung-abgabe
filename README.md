@@ -188,17 +188,21 @@ Das Skript nutzt „typische“ Parameter und eine Seed-Station (Standard: `DE-0
 * `PERF_DURATION_SECONDS` (Default: `15`)
 * `PERF_WARMUP_SECONDS` (Default: `5`)
 
-### Gemessene Ergebnisse
+### Gemessene Ergebnisse (nachvollziehbar)
 
-> Hinweis: Bitte nach dem ersten Lauf `pnpm perf` die Messwerte hier eintragen.
-> In CI/Abnahme muss nachvollziehbar dokumentiert sein, dass die Kernfunktionen die Zielwerte einhalten.
+Messung via `pnpm perf` mit:
 
-Beispiel-Format (einzutragen):
+* Base URL: `http://localhost:3001`
+* Connections: 20
+* Duration: 15s (Warmup: 5s)
+* Timeout: 5000ms
 
 | Endpoint                       | avg (ms) | p90 (ms) | p95 (ms) | Ziel      | Erfüllt |
 | ------------------------------ | -------: | -------: | -------: | --------- | ------- |
-| `/api/stations/nearby`         |     TODO |     TODO |     TODO | < 3000 ms | TODO    |
-| `/api/stations/:id/aggregates` |     TODO |     TODO |     TODO | < 3000 ms | TODO    |
+| `/api/stations/nearby`         |        6 |        8 |        9 | < 3000 ms | Ja      |
+| `/api/stations/:id/aggregates` |        7 |        9 |       10 | < 3000 ms | Ja      |
+
+**Fazit:** Beide Kernfunktionen halten die Zielwerte deutlich ein (unter definierter Minimal-Seed wie in CI).
 
 ---
 
@@ -230,11 +234,13 @@ Vitest erzeugt pro Package einen Coverage-Report unter:
 
 Der CI-Workflow führt **zusätzlich** zu `pnpm test` auch `pnpm test:coverage` aus und lädt den HTML/lcov-Report als Artifact **coverage-report** hoch.
 
-### Aktuelle Coverage-Kennzahl
+### Aktuelle Coverage-Kennzahlen (Stand: aktueller Commit)
 
-> Hinweis: Bitte die Kennzahl nach einem `pnpm test:coverage` Lauf aktualisieren.
-
-* Gesamt (Lines): **TODO%**
+* `packages/shared` – **Lines 95.12%**
+* `apps/web` – **Lines 86.75%**
+  *Hinweis:* Web-Coverage ist bewusst auf `apps/web/lib/**` begrenzt (HTTP-/Error-Logik), um Next.js Route-/UI-Dateien nicht künstlich als „0%“ in die Unit-Test-Coverage einzurechnen.
+* `apps/api` – **Lines ~27.35%**
+  *Hinweis:* Importer/Entry-Files sind nicht unit-tested; der Fokus liegt auf Integrationstests der Endpunkte + DB.
 
 ---
 
@@ -307,10 +313,10 @@ Der Image-Workflow (`.github/workflows/images.yml`) baut und pusht Images bei:
 * `push` auf `main`
 * `push` von Tags `v*.*.*`
 
-Images:
+Images (konkret für dieses Repo):
 
-* `ghcr.io/<owner>/<repo>-api`
-* `ghcr.io/<owner>/<repo>-web`
+* `ghcr.io/ynnckw/webanwendung-abgabe-api`
+* `ghcr.io/ynnckw/webanwendung-abgabe-web`
 
 Tagging:
 
@@ -319,7 +325,8 @@ Tagging:
 
 **Verifikation (Prüfer)**
 
-* GitHub Repository → **Packages** → gewünschtes Image auswählen
+* GitHub Repository → **Packages**
+* Package `webanwendung-abgabe-api` bzw. `webanwendung-abgabe-web` öffnen
 * Prüfen, dass sowohl `latest` als auch `sha-...` Tags vorhanden sind.
 
 ---
