@@ -10,10 +10,11 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U postgres -d ghcn"]
       interval: 5s
-      timeout: 5s
-      retries: 10
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   importer:
     build:
@@ -25,12 +26,18 @@ services:
       NOAA_IMPORT_FORCE: ${NOAA_IMPORT_FORCE:-0}
       NOAA_END_YEAR: ${NOAA_END_YEAR:-2025}
       NOAA_CACHE_DIR: /data/noaa-cache
-    command: ["sh", "-c", "pnpm prisma migrate deploy && node apps/api/dist/importer/noaa.js"]
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - noaa_cache:/data/noaa-cache
+    # WICHTIG: $$ -> verhindert Compose-Interpolation (kein "i variable is not set")
+    command:
+      [
+        "sh",
+        "-c",
+        "i=0; until pnpm prisma migrate deploy; do i=$$((i+1)); echo \"DB not reachable yet (attempt $$i/30)\"; if [ $$i -ge 30 ]; then exit 1; fi; sleep 2; done; node apps/api/dist/importer/noaa.js",
+      ]
 
   api:
     build:
@@ -65,8 +72,15 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        # Build-Time (wichtig, da Next rewrites beim Build fest verdrahtet)
+        API_BASE_URL: http://api:3001
+        # Falls ihr irgendwo im Client eine BaseURL verwendet: empfehlenswert "same-origin"
+        NEXT_PUBLIC_API_BASE_URL: /api
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+      # Runtime (optional, aber sauber konsistent)
+      API_BASE_URL: http://api:3001
+      NEXT_PUBLIC_API_BASE_URL: /api
     ports:
       - "3000:3000"
     depends_on:

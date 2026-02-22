@@ -1,0 +1,27 @@
+# Dependencies (wichtig: verhindert pnpm-Prompt + riesigen Build-Context)
+node_modules
+**/node_modules
+.pnpm-store
+**/.pnpm-store
+
+# Build outputs / caches
+**/.next
+**/dist
+**/coverage
+apps/web/coverage
+*.log
+
+# Local env (nicht ins Image backen)
+.env
+
+# Git / tooling (für Runtime nicht nötig)
+.git
+.github
+
+# Docs / Office-Dateien (optional, aber reduziert Context deutlich)
+docs
+*.docx
+
+# OS noise
+.DS_Store
+Thumbs.db

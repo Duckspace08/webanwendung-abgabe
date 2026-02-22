@@ -12,7 +12,8 @@ RUN corepack enable
 COPY . .
 
 # Reproduzierbar
-RUN pnpm install --frozen-lockfile
+ENV CI=1
+RUN pnpm install --frozen-lockfile --force
 
 # Prisma + Builds
 RUN pnpm prisma generate --schema=prisma/schema.prisma

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { MAX_LIMIT, MAX_RADIUS } from '@webanwendung/shared';
 
 export const HelpDialog = () => {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
