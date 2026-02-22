@@ -8,13 +8,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY prisma ./prisma
 
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 RUN npx prisma generate --schema=prisma/schema.prisma
 RUN pnpm --filter @webanwendung/shared build
 RUN pnpm --filter @webanwendung/api build
