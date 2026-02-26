@@ -11,10 +11,12 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "format": "pnpm -r format",
-    "test": "pnpm -r test",
-    "test:coverage": "pnpm -r test:coverage",
+    "test": "pnpm -r test --",
+    "test:coverage": "pnpm -r test -- --coverage",
     "e2e": "playwright test",
-    "perf": "node tools/perf/perf.mjs"
+    "perf": "node tools/perf/perf.mjs",
+    "prisma:generate": "prisma generate",
+    "postinstall": "pnpm run prisma:generate"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.2",
