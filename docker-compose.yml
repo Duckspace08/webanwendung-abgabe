@@ -73,14 +73,11 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        # Build-Time (wichtig, da Next rewrites beim Build fest verdrahtet)
         API_BASE_URL: http://api:3001
-        # Falls ihr irgendwo im Client eine BaseURL verwendet: empfehlenswert "same-origin"
-        NEXT_PUBLIC_API_BASE_URL: /api
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
     environment:
-      # Runtime (optional, aber sauber konsistent)
       API_BASE_URL: http://api:3001
-      NEXT_PUBLIC_API_BASE_URL: /api
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
     ports:
       - "3000:3000"
     depends_on:

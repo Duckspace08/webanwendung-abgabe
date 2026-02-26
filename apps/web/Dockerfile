@@ -11,7 +11,7 @@ RUN rm -f apps/web/.env.local
 
 # Build-Args (werden via docker-compose.yml build.args gesetzt)
 ARG API_BASE_URL=http://api:3001
-ARG NEXT_PUBLIC_API_BASE_URL=/api
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3001
 
 # Für Next build relevant (rewrites + NEXT_PUBLIC_* Inlining)
 ENV API_BASE_URL=${API_BASE_URL}
