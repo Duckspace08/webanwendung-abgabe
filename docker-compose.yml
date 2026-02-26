@@ -31,12 +31,12 @@ services:
         condition: service_healthy
     volumes:
       - noaa_cache:/data/noaa-cache
-    # WICHTIG: $$ -> verhindert Compose-Interpolation (kein "i variable is not set")
     command:
       [
         "sh",
         "-c",
-        "i=0; until pnpm prisma migrate deploy; do i=$$((i+1)); echo \"DB not reachable yet (attempt $$i/30)\"; if [ $$i -ge 30 ]; then exit 1; fi; sleep 2; done; node apps/api/dist/importer/noaa.js",
+        "i=0; until pnpm prisma migrate deploy; do i=$$((i+1)); echo \"DB not reachable yet (attempt $$i/30)\"; if [ $$i -ge 30 ]; then exit 1; fi; sleep 2; done; \
+         a=0; until node apps/api/dist/importer/noaa.js; do a=$$((a+1)); echo \"Importer failed (attempt $$a/3) – retrying in 10s\"; if [ $$a -ge 3 ]; then exit 1; fi; sleep 10; done",
       ]
 
   api:
