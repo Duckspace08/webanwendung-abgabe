@@ -76,6 +76,27 @@ function toFiniteNumber(value: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Normalisiert Texte für eine "umlaut-/diakritika-unabhängige" Suche.
+ * Beispiele:
+ *  - "Köln" -> "koln"
+ *  - "Koeln" -> "koln" (über oe->o)
+ *  - "München" -> "munchen"
+ *  - "Straße" -> "strasse"
+ */
+function foldForSearch(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '') // Diakritika entfernen
+    .replace(/ß/g, 'ss')
+    // optional: deutsche Umschreibungen (Koeln -> Koln etc.)
+    .replace(/ae/g, 'a')
+    .replace(/oe/g, 'o')
+    .replace(/ue/g, 'u');
+}
+
 function normalizeStation(s: StationApi): Station | null {
   const id = (s.id ?? s.stationId ?? '').trim();
   const lat = s.latitude ?? s.lat;
@@ -224,8 +245,9 @@ export default function ExplorePage() {
       const data = (await res.json()) as StationApi[];
       const normalized = data.map(normalizeStation).filter((x): x is Station => x !== null);
 
-      const q = form.nameQuery.trim().toLowerCase();
-      const filtered = q ? normalized.filter((s) => s.name.toLowerCase().includes(q)) : normalized;
+      // Stationsnamen-Filter: case-insensitive + umlaut/diakritika-insensitive
+      const qFold = foldForSearch(form.nameQuery);
+      const filtered = qFold ? normalized.filter((s) => foldForSearch(s.name).includes(qFold)) : normalized;
 
       setStations(filtered);
     } catch (e) {
@@ -293,6 +315,7 @@ export default function ExplorePage() {
           <Field label="Min Year" value={form.minYear} onChange={(v) => onChange('minYear', v)} inputMode="numeric" error={errors.minYear} />
           <Field label="Max Year" value={form.maxYear} onChange={(v) => onChange('maxYear', v)} inputMode="numeric" error={errors.maxYear} />
 
+          {/* Suchfeld unter Limit/Min/Max, volle Breite wie der Button */}
           <Field
             className="md:col-span-3"
             label={
