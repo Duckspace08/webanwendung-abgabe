@@ -4,8 +4,7 @@ import ReactECharts from 'echarts-for-react';
 
 const round1 = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(1)) : null);
 
-const format1 = (v: unknown) =>
-  typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—';
+const format1 = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—');
 
 export const YearlyChart = ({
   yearly,
@@ -21,11 +20,7 @@ export const YearlyChart = ({
   const tmax = yearly.map((entry) => round1(entry.avgTmaxC));
 
   return (
-    <div
-      role="img"
-      aria-label={ariaLabel ?? 'Diagramm: Jahresmittelwerte für Tmin und Tmax'}
-      aria-describedby={tableId}
-    >
+    <div role="img" aria-label={ariaLabel ?? 'Diagramm: Jahresmittelwerte für Tmin und Tmax'} aria-describedby={tableId}>
       <ReactECharts
         option={{
           tooltip: {

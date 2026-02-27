@@ -4,8 +4,7 @@ import ReactECharts from 'echarts-for-react';
 
 const round1 = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(1)) : null);
 
-const format1 = (v: unknown) =>
-  typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—';
+const format1 = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—');
 
 export const SeasonalChart = ({
   seasonal,

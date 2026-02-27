@@ -4,15 +4,36 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAggregates } from '../../../lib/api';
-import { YearlyChart } from '../../../components/YearlyChart';
-import { SeasonalChart } from '../../../components/SeasonalChart';
+import { CombinedTemperatureChart } from '../../../components/CombinedTemperatureChart';
 import { ErrorBanner } from '../../../components/ErrorBanner';
 import { toUserMessage } from '../../../lib/errors';
 import { useToast } from '../../../components/ToastProvider';
 
 type AggregatesResponse = Awaited<ReturnType<typeof fetchAggregates>>;
 
-const seasons = ['SPRING', 'SUMMER', 'AUTUMN', 'WINTER'] as const;
+const seasonToAbbr: Record<string, 'SP' | 'SU' | 'AU' | 'WI'> = {
+  SPRING: 'SP',
+  SUMMER: 'SU',
+  AUTUMN: 'AU',
+  WINTER: 'WI',
+};
+
+type CombinedRow = {
+  year: number;
+  'TMIN-YR': number | null;
+  'TMIN-SP': number | null;
+  'TMIN-SU': number | null;
+  'TMIN-AU': number | null;
+  'TMIN-WI': number | null;
+  'TMAX-YR': number | null;
+  'TMAX-SP': number | null;
+  'TMAX-SU': number | null;
+  'TMAX-AU': number | null;
+  'TMAX-WI': number | null;
+};
+
+const toFixedOrDash = (v: number | null | undefined) =>
+  typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—';
 
 function SkeletonBlock({ className, label }: { className: string; label?: string }) {
   return (
@@ -54,7 +75,6 @@ export default function StationPage() {
   const [fromYear, setFromYear] = useState(initialFrom);
   const [toYear, setToYear] = useState(initialTo);
 
-  const [season, setSeason] = useState<(typeof seasons)[number]>('SUMMER');
   const [rangeError, setRangeError] = useState<string | null>(null);
 
   const queryKey = useMemo(() => ['aggregates', stationId, fromYear, toYear], [stationId, fromYear, toYear]);
@@ -97,8 +117,56 @@ export default function StationPage() {
     if (!changed) void refetch();
   };
 
-  const yearlyTableId = 'yearly-table';
-  const seasonalTableId = 'seasonal-table';
+  const combinedRows = useMemo<CombinedRow[] | null>(() => {
+    if (!renderData) return null;
+
+    const yearsInData = new Set<number>();
+    for (const y of renderData.yearly) yearsInData.add(y.year);
+    for (const s of renderData.seasonal) yearsInData.add(s.year);
+
+    const years = Array.from(yearsInData).sort((a, b) => a - b);
+    if (years.length === 0) return [];
+
+    const minYear = years[0];
+    const maxYear = years[years.length - 1];
+
+    const byYear = new Map<number, CombinedRow>();
+    for (let year = minYear; year <= maxYear; year += 1) {
+      byYear.set(year, {
+        year,
+        'TMIN-YR': null,
+        'TMIN-SP': null,
+        'TMIN-SU': null,
+        'TMIN-AU': null,
+        'TMIN-WI': null,
+        'TMAX-YR': null,
+        'TMAX-SP': null,
+        'TMAX-SU': null,
+        'TMAX-AU': null,
+        'TMAX-WI': null,
+      });
+    }
+
+    for (const row of renderData.yearly) {
+      const target = byYear.get(row.year);
+      if (!target) continue;
+      target['TMIN-YR'] = row.avgTminC;
+      target['TMAX-YR'] = row.avgTmaxC;
+    }
+
+    for (const row of renderData.seasonal) {
+      const abbr = seasonToAbbr[row.season];
+      if (!abbr) continue;
+      const target = byYear.get(row.year);
+      if (!target) continue;
+      target[`TMIN-${abbr}` as const] = row.avgTminC;
+      target[`TMAX-${abbr}` as const] = row.avgTmaxC;
+    }
+
+    return Array.from(byYear.values()).sort((a, b) => a.year - b.year);
+  }, [renderData]);
+
+  const combinedTableId = 'combined-table';
 
   return (
     <section className="grid gap-8" aria-busy={isLoading || isFetching}>
@@ -184,111 +252,60 @@ export default function StationPage() {
         ) : null}
       </div>
 
-      {/* Content: always render both cards with reserved space (avoid CLS) */}
+      {/* Content: Chart + Table */}
       <div className="grid gap-8">
-        {/* Yearly */}
         <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <h3 className="text-lg font-semibold text-white">Jahresmittelwerte</h3>
+          <h3 className="text-lg font-semibold text-white">Temperaturverlauf</h3>
 
           <div className="mt-4">
             {renderData ? (
-              <YearlyChart yearly={renderData.yearly} tableId={yearlyTableId} />
+              <CombinedTemperatureChart
+                yearly={renderData.yearly}
+                seasonal={renderData.seasonal}
+                tableId={combinedTableId}
+              />
             ) : (
-              <SkeletonBlock className="h-[360px] w-full" label="Chart lädt…" />
+              <SkeletonBlock className="h-[420px] w-full" label="Chart lädt…" />
             )}
           </div>
 
           <div className="mt-6 overflow-x-auto">
-            {renderData ? (
-              <table id={yearlyTableId} className="min-w-full text-sm text-slate-200">
-                <caption className="sr-only">Tabellarische Alternative: Jahresmittelwerte (Tmin/Tmax)</caption>
+            {combinedRows ? (
+              <table id={combinedTableId} className="min-w-full text-sm text-slate-200">
+                <caption className="sr-only">
+                  Tabellarische Alternative: Jahres- und Saisonmittelwerte (TMIN/TMAX) pro Jahr
+                </caption>
                 <thead className="text-left text-slate-400">
                   <tr>
                     <th className="py-2">Year</th>
-                    <th className="py-2">Avg Tmin (°C)</th>
-                    <th className="py-2">Avg Tmax (°C)</th>
-                    <th className="py-2">Days Tmin</th>
-                    <th className="py-2">Days Tmax</th>
+                    <th className="py-2">TMIN-YR</th>
+                    <th className="py-2">TMIN-SP</th>
+                    <th className="py-2">TMIN-SU</th>
+                    <th className="py-2">TMIN-AU</th>
+                    <th className="py-2">TMIN-WI</th>
+                    <th className="py-2">TMAX-YR</th>
+                    <th className="py-2">TMAX-SP</th>
+                    <th className="py-2">TMAX-SU</th>
+                    <th className="py-2">TMAX-AU</th>
+                    <th className="py-2">TMAX-WI</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {renderData.yearly.map((row) => (
+                  {combinedRows.map((row) => (
                     <tr key={row.year} className="border-t border-slate-800">
                       <td className="py-2">{row.year}</td>
-                      <td className="py-2">{row.avgTminC?.toFixed(1) ?? '—'}</td>
-                      <td className="py-2">{row.avgTmaxC?.toFixed(1) ?? '—'}</td>
-                      <td className="py-2">{row.daysCountTmin}</td>
-                      <td className="py-2">{row.daysCountTmax}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMIN-YR'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMIN-SP'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMIN-SU'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMIN-AU'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMIN-WI'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMAX-YR'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMAX-SP'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMAX-SU'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMAX-AU'])}</td>
+                      <td className="py-2">{toFixedOrDash(row['TMAX-WI'])}</td>
                     </tr>
                   ))}
-                </tbody>
-              </table>
-            ) : (
-              <SkeletonBlock className="h-[240px] w-full" label="Tabelle lädt…" />
-            )}
-          </div>
-        </div>
-
-        {/* Seasonal */}
-        <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <h3 className="text-lg font-semibold text-white">Saisonmittelwerte</h3>
-
-            <div className="grid gap-1">
-              <label htmlFor="season" className="text-sm text-slate-300">
-                Saison
-              </label>
-              <select
-                id="season"
-                value={season}
-                onChange={(event) => setSeason(event.target.value as (typeof seasons)[number])}
-                disabled={!renderData}
-                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-60"
-              >
-                {seasons.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="mt-4">
-            {renderData ? (
-              <SeasonalChart seasonal={renderData.seasonal} season={season} tableId={seasonalTableId} />
-            ) : (
-              <SkeletonBlock className="h-[320px] w-full" label="Chart lädt…" />
-            )}
-          </div>
-
-          <div className="mt-6 overflow-x-auto">
-            {renderData ? (
-              <table id={seasonalTableId} className="min-w-full text-sm text-slate-200">
-                <caption className="sr-only">Tabellarische Alternative: Saisonmittelwerte (Tmin/Tmax)</caption>
-                <thead className="text-left text-slate-400">
-                  <tr>
-                    <th className="py-2">Year</th>
-                    <th className="py-2">Season</th>
-                    <th className="py-2">Avg Tmin (°C)</th>
-                    <th className="py-2">Avg Tmax (°C)</th>
-                    <th className="py-2">Days Tmin</th>
-                    <th className="py-2">Days Tmax</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {renderData.seasonal
-                    .filter((row) => row.season === season)
-                    .map((row) => (
-                      <tr key={`${row.year}-${row.season}`} className="border-t border-slate-800">
-                        <td className="py-2">{row.year}</td>
-                        <td className="py-2">{row.season}</td>
-                        <td className="py-2">{row.avgTminC?.toFixed(1) ?? '—'}</td>
-                        <td className="py-2">{row.avgTmaxC?.toFixed(1) ?? '—'}</td>
-                        <td className="py-2">{row.daysCountTmin}</td>
-                        <td className="py-2">{row.daysCountTmax}</td>
-                      </tr>
-                    ))}
                 </tbody>
               </table>
             ) : (
