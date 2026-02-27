@@ -54,8 +54,8 @@ const StationsMap = dynamic(() => import('@/components/StationsMap'), { ssr: fal
 const DEFAULT_FORM: FormState = {
   lat: '52.52',
   lon: '13.405',
-  radiusKm: '500',
-  limit: '10',
+  radiusKm: '50',
+  limit: '5',
   minYear: '2018',
   maxYear: '2025',
 };
