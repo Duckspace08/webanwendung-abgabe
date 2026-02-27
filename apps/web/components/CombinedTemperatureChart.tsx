@@ -23,7 +23,7 @@ type SeriesKey =
   | 'TMAX-AU'
   | 'TMAX-WI';
 
-const SEASON_TO_ABBR: Record<string, 'SP' | 'SU' | 'AU' | 'WI'> = {
+const SEASON_TO_ABBR: Partial<Record<string, 'SP' | 'SU' | 'AU' | 'WI'>> = {
   SPRING: 'SP',
   SUMMER: 'SU',
   AUTUMN: 'AU',
@@ -66,6 +66,12 @@ const SERIES_ORDER: SeriesKey[] = [
   'TMAX-WI',
 ];
 
+const createSeriesData = (len: number): Record<SeriesKey, Array<number | null>> =>
+  SERIES_ORDER.reduce((acc, key) => {
+    acc[key] = len === 0 ? ([] as Array<number | null>) : Array.from({ length: len }, () => null);
+    return acc;
+  }, {} as Record<SeriesKey, Array<number | null>>);
+
 export const CombinedTemperatureChart = ({
   yearly,
   seasonal,
@@ -86,7 +92,7 @@ export const CombinedTemperatureChart = ({
     if (yearList.length === 0) {
       return {
         years: [] as number[],
-        seriesData: Object.fromEntries(SERIES_ORDER.map((k) => [k, []])) as Record<SeriesKey, Array<number | null>>,
+        seriesData: createSeriesData(0),
       };
     }
 
@@ -99,9 +105,7 @@ export const CombinedTemperatureChart = ({
     const idxByYear = new Map<number, number>();
     years.forEach((y, idx) => idxByYear.set(y, idx));
 
-    const seriesData = Object.fromEntries(
-      SERIES_ORDER.map((k) => [k, Array.from({ length: years.length }, () => null)])
-    ) as Record<SeriesKey, Array<number | null>>;
+    const seriesData = createSeriesData(years.length);
 
     for (const row of yearly) {
       const idx = idxByYear.get(row.year);
@@ -150,12 +154,12 @@ export const CombinedTemperatureChart = ({
         textStyle: { color: '#e2e8f0' },
       },
       grid: {
-        left: 52,
-        right: 28,
-        top: 24,
-        bottom: 78,
-        containLabel: true,
-      },
+	  left: 52,
+	  right: 28,
+	  top: 40,   // vorher: 24  -> mehr Luft für das "°C"
+	  bottom: 78,
+	  containLabel: true,
+	  },
       xAxis: {
         type: 'category',
         data: years,
