@@ -45,6 +45,7 @@ type FormState = {
   limit: string;
   minYear: string;
   maxYear: string;
+  nameQuery: string;
 };
 
 type FormErrors = Partial<Record<keyof FormState, string>>;
@@ -58,6 +59,7 @@ const DEFAULT_FORM: FormState = {
   limit: '5',
   minYear: '2018',
   maxYear: '2025',
+  nameQuery: '',
 };
 
 const LIMITS = {
@@ -221,7 +223,11 @@ export default function ExplorePage() {
 
       const data = (await res.json()) as StationApi[];
       const normalized = data.map(normalizeStation).filter((x): x is Station => x !== null);
-      setStations(normalized);
+
+      const q = form.nameQuery.trim().toLowerCase();
+      const filtered = q ? normalized.filter((s) => s.name.toLowerCase().includes(q)) : normalized;
+
+      setStations(filtered);
     } catch (e) {
       setStations([]);
       setFetchError(e instanceof Error ? e.message : 'Unbekannter Fehler beim Laden der Stationen.');
@@ -286,6 +292,18 @@ export default function ExplorePage() {
 
           <Field label="Min Year" value={form.minYear} onChange={(v) => onChange('minYear', v)} inputMode="numeric" error={errors.minYear} />
           <Field label="Max Year" value={form.maxYear} onChange={(v) => onChange('maxYear', v)} inputMode="numeric" error={errors.maxYear} />
+
+          <Field
+            className="md:col-span-3"
+            label={
+              <>
+                Suche <span className="font-normal text-slate-400">(Stationsname)</span>
+              </>
+            }
+            value={form.nameQuery}
+            onChange={(v) => onChange('nameQuery', v)}
+            placeholder="z. B. Bamberg"
+          />
         </div>
 
         <div className="mt-5">
@@ -358,6 +376,7 @@ export default function ExplorePage() {
 }
 
 function Field(props: {
+  className?: string;
   label: React.ReactNode;
   value: string;
   onChange: (value: string) => void;
@@ -366,7 +385,7 @@ function Field(props: {
   error?: string;
 }) {
   return (
-    <div>
+    <div className={props.className}>
       <label className="mb-1 block text-xs font-medium text-slate-200">{props.label}</label>
       <input
         value={props.value}
