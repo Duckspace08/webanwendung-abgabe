@@ -177,7 +177,11 @@ export default function StationPage() {
           )}
         </div>
 
-        {error ? <div className="mt-4"><ErrorBanner message={toUserMessage(error)} /></div> : null}
+        {error ? (
+          <div className="mt-4">
+            <ErrorBanner message={toUserMessage(error)} />
+          </div>
+        ) : null}
       </div>
 
       {/* Content: always render both cards with reserved space (avoid CLS) */}
@@ -211,8 +215,8 @@ export default function StationPage() {
                   {renderData.yearly.map((row) => (
                     <tr key={row.year} className="border-t border-slate-800">
                       <td className="py-2">{row.year}</td>
-                      <td className="py-2">{row.avgTminC?.toFixed(2) ?? '—'}</td>
-                      <td className="py-2">{row.avgTmaxC?.toFixed(2) ?? '—'}</td>
+                      <td className="py-2">{row.avgTminC?.toFixed(1) ?? '—'}</td>
+                      <td className="py-2">{row.avgTmaxC?.toFixed(1) ?? '—'}</td>
                       <td className="py-2">{row.daysCountTmin}</td>
                       <td className="py-2">{row.daysCountTmax}</td>
                     </tr>
@@ -279,8 +283,8 @@ export default function StationPage() {
                       <tr key={`${row.year}-${row.season}`} className="border-t border-slate-800">
                         <td className="py-2">{row.year}</td>
                         <td className="py-2">{row.season}</td>
-                        <td className="py-2">{row.avgTminC?.toFixed(2) ?? '—'}</td>
-                        <td className="py-2">{row.avgTmaxC?.toFixed(2) ?? '—'}</td>
+                        <td className="py-2">{row.avgTminC?.toFixed(1) ?? '—'}</td>
+                        <td className="py-2">{row.avgTmaxC?.toFixed(1) ?? '—'}</td>
                         <td className="py-2">{row.daysCountTmin}</td>
                         <td className="py-2">{row.daysCountTmax}</td>
                       </tr>
