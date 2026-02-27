@@ -1,6 +1,7 @@
 'use client';
 
 import L from 'leaflet';
+import Link from 'next/link';
 import React, { useEffect } from 'react';
 import { Circle, MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
 
@@ -41,13 +42,26 @@ export default function StationsMap(props: {
       {props.stations.slice(0, 200).map((s) => (
         <Marker key={s.id} position={[s.lat, s.lon]}>
           <Popup>
-            <div className="text-sm font-semibold">{s.name}</div>
+            <div className="text-sm font-semibold">
+              <Link
+                href={`/station/${encodeURIComponent(s.id)}`}
+                className="text-blue-700 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500/40 rounded"
+                aria-label={`Station öffnen: ${s.name} (${s.id})`}
+              >
+                {s.name}
+              </Link>
+            </div>
+
             <div className="text-xs text-slate-600">{s.id}</div>
             <div className="text-xs">
               {s.lat.toFixed(3)}, {s.lon.toFixed(3)}
             </div>
             {typeof s.distanceKm === 'number' ? <div className="text-xs">{s.distanceKm.toFixed(1)} km</div> : null}
-            {s.firstYear && s.lastYear ? <div className="text-xs">{s.firstYear}–{s.lastYear}</div> : null}
+            {s.firstYear && s.lastYear ? (
+              <div className="text-xs">
+                {s.firstYear}–{s.lastYear}
+              </div>
+            ) : null}
           </Popup>
         </Marker>
       ))}
