@@ -75,15 +75,59 @@ const createSeriesData = (len: number): Record<SeriesKey, Array<number | null>> 
 export const CombinedTemperatureChart = ({
   yearly,
   seasonal,
+  fromYear,
+  toYear,
   ariaLabel,
   tableId,
 }: {
   yearly: YearlyRow[];
   seasonal: SeasonalRow[];
+  /**
+   * Optional: wenn gesetzt, wird die X-Achse exakt auf diesen Bereich "fixiert"
+   * (konsistent zur Tabelle/Filter).
+   */
+  fromYear?: number;
+  toYear?: number;
   ariaLabel?: string;
   tableId?: string;
 }) => {
   const { years, seriesData } = useMemo(() => {
+    const hasValidRange =
+      Number.isInteger(fromYear) && Number.isInteger(toYear) && (fromYear as number) <= (toYear as number);
+
+    if (hasValidRange) {
+      const years: number[] = [];
+      for (let y = fromYear as number; y <= (toYear as number); y += 1) years.push(y);
+
+      const idxByYear = new Map<number, number>();
+      years.forEach((y, idx) => idxByYear.set(y, idx));
+
+      const seriesData = createSeriesData(years.length);
+
+      for (const row of yearly) {
+        const idx = idxByYear.get(row.year);
+        if (idx === undefined) continue;
+        seriesData['TMIN-YR'][idx] = round1(row.avgTminC);
+        seriesData['TMAX-YR'][idx] = round1(row.avgTmaxC);
+      }
+
+      for (const row of seasonal) {
+        const abbr = SEASON_TO_ABBR[row.season];
+        if (!abbr) continue;
+        const idx = idxByYear.get(row.year);
+        if (idx === undefined) continue;
+
+        const tminKey = `TMIN-${abbr}` as SeriesKey;
+        const tmaxKey = `TMAX-${abbr}` as SeriesKey;
+
+        seriesData[tminKey][idx] = round1(row.avgTminC);
+        seriesData[tmaxKey][idx] = round1(row.avgTmaxC);
+      }
+
+      return { years, seriesData };
+    }
+
+    // Fallback: Range aus vorhandenen Daten ableiten
     const yearsInData = new Set<number>();
     for (const y of yearly) yearsInData.add(y.year);
     for (const s of seasonal) yearsInData.add(s.year);
@@ -96,7 +140,6 @@ export const CombinedTemperatureChart = ({
       };
     }
 
-    // Kontinuierliche X-Achse, um Lücken als "null" sichtbar zu machen.
     const minYear = yearList[0];
     const maxYear = yearList[yearList.length - 1];
     const years: number[] = [];
@@ -128,7 +171,7 @@ export const CombinedTemperatureChart = ({
     }
 
     return { years, seriesData };
-  }, [yearly, seasonal]);
+  }, [yearly, seasonal, fromYear, toYear]);
 
   const option = useMemo(
     () => ({
@@ -154,12 +197,12 @@ export const CombinedTemperatureChart = ({
         textStyle: { color: '#e2e8f0' },
       },
       grid: {
-	  left: 52,
-	  right: 28,
-	  top: 40,   // vorher: 24  -> mehr Luft für das "°C"
-	  bottom: 78,
-	  containLabel: true,
-	  },
+        left: 52,
+        right: 28,
+        top: 40,
+        bottom: 78,
+        containLabel: true,
+      },
       xAxis: {
         type: 'category',
         data: years,

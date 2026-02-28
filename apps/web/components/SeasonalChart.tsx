@@ -2,20 +2,30 @@
 
 import ReactECharts from 'echarts-for-react';
 
-const round1 = (v: number | null) => (typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(1)) : null);
+type SeasonalRow = { year: number; season: string; avgTminC: number | null; avgTmaxC: number | null };
+type Season = 'SPRING' | 'SUMMER' | 'AUTUMN' | 'WINTER';
+
+const round1 = (v: number | null | undefined) =>
+  typeof v === 'number' && Number.isFinite(v) ? Number(v.toFixed(1)) : null;
 
 const format1 = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—');
+
+// konsistent zur CombinedTemperatureChart-Farbwelt
+const SEASON_COLORS: Record<Season, { tmax: string; tmin: string }> = {
+  SPRING: { tmax: '#a3e635', tmin: '#8b5cf6' }, // TMAX-SP / TMIN-SP
+  SUMMER: { tmax: '#facc15', tmin: '#3b82f6' }, // TMAX-SU / TMIN-SU
+  AUTUMN: { tmax: '#c2410c', tmin: '#2dd4bf' }, // TMAX-AU / TMIN-AU
+  WINTER: { tmax: '#6366f1', tmin: '#f59e0b' }, // TMAX-WI / TMIN-WI
+};
 
 export const SeasonalChart = ({
   seasonal,
   season,
   ariaLabel,
-  tableId,
 }: {
-  seasonal: Array<{ year: number; season: string; avgTminC: number | null; avgTmaxC: number | null }>;
-  season: string;
+  seasonal: SeasonalRow[];
+  season: Season;
   ariaLabel?: string;
-  tableId?: string;
 }) => {
   const filtered = seasonal.filter((entry) => entry.season === season);
   const years = filtered.map((entry) => entry.year);
@@ -23,12 +33,10 @@ export const SeasonalChart = ({
   const tmin = filtered.map((e) => round1(e.avgTminC));
   const tmax = filtered.map((e) => round1(e.avgTmaxC));
 
+  const colors = SEASON_COLORS[season];
+
   return (
-    <div
-      role="img"
-      aria-label={ariaLabel ?? `Diagramm: Saisonmittelwerte (${season}) für Tmin und Tmax`}
-      aria-describedby={tableId}
-    >
+    <div role="img" aria-label={ariaLabel ?? `Diagramm: Saisonmittelwerte (${season}) für TMIN/TMAX`}>
       <ReactECharts
         option={{
           tooltip: {
@@ -45,12 +53,16 @@ export const SeasonalChart = ({
             },
           },
           legend: {
-            data: ['Tmin', 'Tmax'],
+            data: ['TMIN', 'TMAX'],
+            icon: 'rect',
             textStyle: { color: '#e2e8f0' },
           },
+          grid: { left: 52, right: 28, top: 40, bottom: 44, containLabel: true },
           xAxis: { type: 'category', data: years, axisLabel: { color: '#cbd5f5' } },
           yAxis: {
             type: 'value',
+            name: '°C',
+            nameTextStyle: { color: '#cbd5f5' },
             axisLabel: {
               color: '#cbd5f5',
               formatter: (value: number) => Number(value).toFixed(1),
@@ -58,33 +70,16 @@ export const SeasonalChart = ({
           },
           series: [
             {
-              name: 'Tmin',
+              name: 'TMIN',
               type: 'bar',
               data: tmin,
-              itemStyle: {
-                color: '#60a5fa',
-                decal: {
-                  symbol: 'rect',
-                  dashArrayX: [2, 2],
-                  dashArrayY: [2, 2],
-                  color: 'rgba(255,255,255,0.35)',
-                },
-              },
+              itemStyle: { color: colors.tmin },
             },
             {
-              name: 'Tmax',
+              name: 'TMAX',
               type: 'bar',
               data: tmax,
-              itemStyle: {
-                // explizit Rot (Anforderung)
-                color: '#ef4444',
-                decal: {
-                  symbol: 'circle',
-                  dashArrayX: [1, 0],
-                  dashArrayY: [3, 3],
-                  color: 'rgba(255,255,255,0.35)',
-                },
-              },
+              itemStyle: { color: colors.tmax },
             },
           ],
         }}

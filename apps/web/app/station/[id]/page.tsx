@@ -5,11 +5,15 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAggregates } from '../../../lib/api';
 import { CombinedTemperatureChart } from '../../../components/CombinedTemperatureChart';
+import { SeasonalChart } from '../../../components/SeasonalChart';
 import { ErrorBanner } from '../../../components/ErrorBanner';
 import { toUserMessage } from '../../../lib/errors';
 import { useToast } from '../../../components/ToastProvider';
 
 type AggregatesResponse = Awaited<ReturnType<typeof fetchAggregates>>;
+
+const seasons = ['SPRING', 'SUMMER', 'AUTUMN', 'WINTER'] as const;
+type Season = (typeof seasons)[number];
 
 const seasonToAbbr: Record<string, 'SP' | 'SU' | 'AU' | 'WI'> = {
   SPRING: 'SP',
@@ -18,19 +22,21 @@ const seasonToAbbr: Record<string, 'SP' | 'SU' | 'AU' | 'WI'> = {
   WINTER: 'WI',
 };
 
+type CombinedKey =
+  | 'TMIN-YR'
+  | 'TMIN-SP'
+  | 'TMIN-SU'
+  | 'TMIN-AU'
+  | 'TMIN-WI'
+  | 'TMAX-YR'
+  | 'TMAX-SP'
+  | 'TMAX-SU'
+  | 'TMAX-AU'
+  | 'TMAX-WI';
+
 type CombinedRow = {
   year: number;
-  'TMIN-YR': number | null;
-  'TMIN-SP': number | null;
-  'TMIN-SU': number | null;
-  'TMIN-AU': number | null;
-  'TMIN-WI': number | null;
-  'TMAX-YR': number | null;
-  'TMAX-SP': number | null;
-  'TMAX-SU': number | null;
-  'TMAX-AU': number | null;
-  'TMAX-WI': number | null;
-};
+} & Record<CombinedKey, number | null>;
 
 const toFixedOrDash = (v: number | null | undefined) =>
   typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—';
@@ -75,6 +81,7 @@ export default function StationPage() {
   const [fromYear, setFromYear] = useState(initialFrom);
   const [toYear, setToYear] = useState(initialTo);
 
+  const [season, setSeason] = useState<Season>('SUMMER');
   const [rangeError, setRangeError] = useState<string | null>(null);
 
   const queryKey = useMemo(() => ['aggregates', stationId, fromYear, toYear], [stationId, fromYear, toYear]);
@@ -113,60 +120,59 @@ export default function StationPage() {
     setFromYear(fromYearInput);
     setToYear(toYearInput);
 
-    // If the range did not change, force a refetch (user explicitly requested reload)
     if (!changed) void refetch();
   };
+
+  const combinedTableId = 'combined-table';
 
   const combinedRows = useMemo<CombinedRow[] | null>(() => {
     if (!renderData) return null;
 
-    const yearsInData = new Set<number>();
-    for (const y of renderData.yearly) yearsInData.add(y.year);
-    for (const s of renderData.seasonal) yearsInData.add(s.year);
-
-    const years = Array.from(yearsInData).sort((a, b) => a - b);
-    if (years.length === 0) return [];
-
-    const minYear = years[0];
-    const maxYear = years[years.length - 1];
+    const mkEmptyRow = (year: number): CombinedRow => ({
+      year,
+      'TMIN-YR': null,
+      'TMIN-SP': null,
+      'TMIN-SU': null,
+      'TMIN-AU': null,
+      'TMIN-WI': null,
+      'TMAX-YR': null,
+      'TMAX-SP': null,
+      'TMAX-SU': null,
+      'TMAX-AU': null,
+      'TMAX-WI': null,
+    });
 
     const byYear = new Map<number, CombinedRow>();
-    for (let year = minYear; year <= maxYear; year += 1) {
-      byYear.set(year, {
-        year,
-        'TMIN-YR': null,
-        'TMIN-SP': null,
-        'TMIN-SU': null,
-        'TMIN-AU': null,
-        'TMIN-WI': null,
-        'TMAX-YR': null,
-        'TMAX-SP': null,
-        'TMAX-SU': null,
-        'TMAX-AU': null,
-        'TMAX-WI': null,
-      });
+    const rows: CombinedRow[] = [];
+
+    for (let y = fromYear; y <= toYear; y += 1) {
+      const r = mkEmptyRow(y);
+      byYear.set(y, r);
+      rows.push(r);
     }
 
-    for (const row of renderData.yearly) {
-      const target = byYear.get(row.year);
-      if (!target) continue;
-      target['TMIN-YR'] = row.avgTminC;
-      target['TMAX-YR'] = row.avgTmaxC;
+    for (const yr of renderData.yearly) {
+      const r = byYear.get(yr.year);
+      if (!r) continue;
+      r['TMIN-YR'] = yr.avgTminC ?? null;
+      r['TMAX-YR'] = yr.avgTmaxC ?? null;
     }
 
-    for (const row of renderData.seasonal) {
-      const abbr = seasonToAbbr[row.season];
+    for (const s of renderData.seasonal) {
+      const abbr = seasonToAbbr[s.season];
       if (!abbr) continue;
-      const target = byYear.get(row.year);
-      if (!target) continue;
-      target[`TMIN-${abbr}` as const] = row.avgTminC;
-      target[`TMAX-${abbr}` as const] = row.avgTmaxC;
+
+      const r = byYear.get(s.year);
+      if (!r) continue;
+
+      const tminKey = `TMIN-${abbr}` as CombinedKey;
+      const tmaxKey = `TMAX-${abbr}` as CombinedKey;
+      r[tminKey] = s.avgTminC ?? null;
+      r[tmaxKey] = s.avgTmaxC ?? null;
     }
 
-    return Array.from(byYear.values()).sort((a, b) => a.year - b.year);
-  }, [renderData]);
-
-  const combinedTableId = 'combined-table';
+    return rows;
+  }, [renderData, fromYear, toYear]);
 
   return (
     <section className="grid gap-8" aria-busy={isLoading || isFetching}>
@@ -252,66 +258,100 @@ export default function StationPage() {
         ) : null}
       </div>
 
-      {/* Content: Chart + Table */}
-      <div className="grid gap-8">
-        <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <h3 className="text-lg font-semibold text-white">Temperaturverlauf</h3>
+      {/* Combined chart + single combined table (Ziel: ein Graph + Tabelle darunter) */}
+      <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
+        <h3 className="text-lg font-semibold text-white">Temperaturverlauf</h3>
 
-          <div className="mt-4">
-            {renderData ? (
-              <CombinedTemperatureChart
-                yearly={renderData.yearly}
-                seasonal={renderData.seasonal}
-                tableId={combinedTableId}
-              />
-            ) : (
-              <SkeletonBlock className="h-[420px] w-full" label="Chart lädt…" />
-            )}
-          </div>
+        <div className="mt-4">
+          {renderData ? (
+            <CombinedTemperatureChart
+              yearly={renderData.yearly}
+              seasonal={renderData.seasonal}
+              fromYear={fromYear}
+              toYear={toYear}
+              tableId={combinedTableId}
+            />
+          ) : (
+            <SkeletonBlock className="h-[420px] w-full" label="Chart lädt…" />
+          )}
+        </div>
 
-          <div className="mt-6 overflow-x-auto">
-            {combinedRows ? (
-              <table id={combinedTableId} className="min-w-full text-sm text-slate-200">
-                <caption className="sr-only">
-                  Tabellarische Alternative: Jahres- und Saisonmittelwerte (TMIN/TMAX) pro Jahr
-                </caption>
-                <thead className="text-left text-slate-400">
-                  <tr>
-                    <th className="py-2">Year</th>
-                    <th className="py-2">TMIN-YR</th>
-                    <th className="py-2">TMIN-SP</th>
-                    <th className="py-2">TMIN-SU</th>
-                    <th className="py-2">TMIN-AU</th>
-                    <th className="py-2">TMIN-WI</th>
-                    <th className="py-2">TMAX-YR</th>
-                    <th className="py-2">TMAX-SP</th>
-                    <th className="py-2">TMAX-SU</th>
-                    <th className="py-2">TMAX-AU</th>
-                    <th className="py-2">TMAX-WI</th>
+        <div className="mt-6 overflow-x-auto">
+          {combinedRows ? (
+            <table id={combinedTableId} className="min-w-full text-sm text-slate-200">
+              <caption className="sr-only">
+                Tabellarische Alternative: Jahres- und Saisonmittelwerte (TMIN/TMAX) pro Jahr
+              </caption>
+              <thead className="text-left text-slate-400">
+                <tr>
+                  <th className="py-2">Year</th>
+                  <th className="py-2">TMIN-YR</th>
+                  <th className="py-2">TMIN-SP</th>
+                  <th className="py-2">TMIN-SU</th>
+                  <th className="py-2">TMIN-AU</th>
+                  <th className="py-2">TMIN-WI</th>
+                  <th className="py-2">TMAX-YR</th>
+                  <th className="py-2">TMAX-SP</th>
+                  <th className="py-2">TMAX-SU</th>
+                  <th className="py-2">TMAX-AU</th>
+                  <th className="py-2">TMAX-WI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {combinedRows.map((row) => (
+                  <tr key={row.year} className="border-t border-slate-800">
+                    <td className="py-2">{row.year}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMIN-YR'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMIN-SP'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMIN-SU'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMIN-AU'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMIN-WI'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMAX-YR'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMAX-SP'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMAX-SU'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMAX-AU'])}</td>
+                    <td className="py-2">{toFixedOrDash(row['TMAX-WI'])}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {combinedRows.map((row) => (
-                    <tr key={row.year} className="border-t border-slate-800">
-                      <td className="py-2">{row.year}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMIN-YR'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMIN-SP'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMIN-SU'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMIN-AU'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMIN-WI'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMAX-YR'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMAX-SP'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMAX-SU'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMAX-AU'])}</td>
-                      <td className="py-2">{toFixedOrDash(row['TMAX-WI'])}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <SkeletonBlock className="h-[260px] w-full" label="Tabelle lädt…" />
-            )}
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <SkeletonBlock className="h-[260px] w-full" label="Tabelle lädt…" />
+          )}
+        </div>
+      </div>
+
+      {/* Optional wieder hinzugefügt: Saison-Balkendiagramm */}
+      <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <h3 className="text-lg font-semibold text-white">Saisonmittelwerte (TMIN/TMAX)</h3>
+
+          <div className="grid gap-1">
+            <label htmlFor="season" className="text-sm text-slate-300">
+              Saison
+            </label>
+            <select
+              id="season"
+              value={season}
+              onChange={(event) => setSeason(event.target.value as Season)}
+              disabled={!renderData}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-white disabled:opacity-60"
+            >
+              {seasons.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
           </div>
+        </div>
+
+        <div className="mt-4">
+          {renderData ? (
+            <SeasonalChart seasonal={renderData.seasonal} season={season} />
+          ) : (
+            <SkeletonBlock className="h-[320px] w-full" label="Chart lädt…" />
+          )}
         </div>
       </div>
     </section>
