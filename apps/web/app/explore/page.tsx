@@ -38,6 +38,11 @@ type NumericParams = {
   maxYear: number;
 };
 
+type YearRange = {
+  fromYear: number;
+  toYear: number;
+};
+
 type FormState = {
   lat: string;
   lon: string;
@@ -179,26 +184,35 @@ function makeQuery(params: NumericParams): string {
   return usp.toString();
 }
 
-function makeStationDetailHref(stationId: string, years?: { minYear: number; maxYear: number }): string {
+function getValidYearsFromForm(form: Pick<FormState, 'minYear' | 'maxYear'>): YearRange | null {
+  const minYear = toFiniteNumber(form.minYear);
+  const maxYear = toFiniteNumber(form.maxYear);
+  if (minYear === null || maxYear === null) return null;
+
+  const fromYear = Math.round(minYear);
+  const toYear = Math.round(maxYear);
+
+  if (fromYear < LIMITS.year.min || fromYear > LIMITS.year.max) return null;
+  if (toYear < LIMITS.year.min || toYear > LIMITS.year.max) return null;
+  if (fromYear > toYear) return null;
+
+  return { fromYear, toYear };
+}
+
+/**
+ * Übergibt den Zeitraum aus Explore beim Öffnen der Station mit.
+ * Wichtig: Wir setzen BEIDE Namenskonventionen, damit die Station-Seite (egal ob from/to oder min/max) sicher passt.
+ */
+function makeStationDetailHref(stationId: string, years?: YearRange): string {
   const base = `/station/${encodeURIComponent(stationId)}`;
   if (!years) return base;
 
   const usp = new URLSearchParams();
-  usp.set('minYear', String(years.minYear));
-  usp.set('maxYear', String(years.maxYear));
+  usp.set('fromYear', String(years.fromYear));
+  usp.set('toYear', String(years.toYear));
+  usp.set('minYear', String(years.fromYear));
+  usp.set('maxYear', String(years.toYear));
   return `${base}?${usp.toString()}`;
-}
-
-function getValidYearsFromForm(form: Pick<FormState, 'minYear' | 'maxYear'>): { minYear: number; maxYear: number } | null {
-  const minYear = toFiniteNumber(form.minYear);
-  const maxYear = toFiniteNumber(form.maxYear);
-
-  if (minYear === null || maxYear === null) return null;
-  if (minYear < LIMITS.year.min || minYear > LIMITS.year.max) return null;
-  if (maxYear < LIMITS.year.min || maxYear > LIMITS.year.max) return null;
-  if (minYear > maxYear) return null;
-
-  return { minYear: Math.round(minYear), maxYear: Math.round(maxYear) };
 }
 
 export default function ExplorePage() {
@@ -206,10 +220,11 @@ export default function ExplorePage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [formTouched, setFormTouched] = useState(false);
 
-  // Merkt sich den zuletzt (validierten) Zeitraum, damit Station-Links immer einen konsistenten Default-Zeitraum mitgeben.
-  const [lastUsedYears, setLastUsedYears] = useState<{ minYear: number; maxYear: number }>({
-    minYear: Number(DEFAULT_FORM.minYear),
-    maxYear: Number(DEFAULT_FORM.maxYear),
+  // Merkt den zuletzt validierten Zeitraum (i. d. R. der Zeitraum der letzten Suche),
+  // damit Station-Links auch dann valide bleiben, wenn der Nutzer ungültige Werte eintippt.
+  const [lastUsedYears, setLastUsedYears] = useState<YearRange>({
+    fromYear: Number(DEFAULT_FORM.minYear),
+    toYear: Number(DEFAULT_FORM.maxYear),
   });
 
   // Trigger für "Fit-to-Radius" nach Klick auf "Stationen suchen".
@@ -267,10 +282,10 @@ export default function ExplorePage() {
     setErrors({});
     lastValidRef.current = result.params;
 
-    // Zeitraum für Station-Links/Station-Detailansicht merken
-    setLastUsedYears({ minYear: result.params.minYear, maxYear: result.params.maxYear });
+    // Zeitraum merken, der für die Suche verwendet wurde
+    setLastUsedYears({ fromYear: result.params.minYear, toYear: result.params.maxYear });
 
-    // Zoom/Viewport der Karte erst nach explizitem "Suchen" anpassen.
+    // Zoom/Viewport der Karte erst nach expliziter "Suchen"-Interaktion anpassen.
     setFitToRadiusNonce((n) => n + 1);
 
     const query = makeQuery(result.params);
@@ -296,8 +311,9 @@ export default function ExplorePage() {
     }
   }, [form]);
 
-  // Wenn der Nutzer den Zeitraum ändert (und er valide ist), soll dieser beim Öffnen einer Station übergeben werden –
-  // auch wenn er nicht erneut auf "Stationen suchen" klickt.
+  // Zeitraum, der beim Öffnen einer Station übergeben wird:
+  // - wenn Eingaben valide: aktuelle Eingaben
+  // - sonst: zuletzt validierter Zeitraum (typisch: aus der letzten Suche)
   const effectiveYears = useMemo(() => {
     return getValidYearsFromForm(form) ?? lastUsedYears;
   }, [form.minYear, form.maxYear, lastUsedYears]);
@@ -439,8 +455,8 @@ export default function ExplorePage() {
               radiusKm={preview.radiusKm}
               stations={stations}
               fitToRadiusNonce={fitToRadiusNonce}
-              minYear={effectiveYears.minYear}
-              maxYear={effectiveYears.maxYear}
+              fromYear={effectiveYears.fromYear}
+              toYear={effectiveYears.toYear}
             />
           </div>
         </div>

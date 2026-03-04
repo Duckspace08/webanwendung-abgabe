@@ -20,12 +20,12 @@ export default function StationsMap(props: {
   radiusKm: number;
   stations: Station[];
   /**
-   * Zeitraum aus der Explore Page.
+   * Zeitraum aus Explore (Start-/Endjahr).
    * Wird beim Öffnen der Station als Query-Parameter weitergegeben,
-   * damit die erste Datenabfrage im Detail diesen Zeitraum nutzt.
+   * damit die erste Datenabfrage im Detail genau diesen Zeitraum nutzt.
    */
-  minYear?: number;
-  maxYear?: number;
+  fromYear?: number;
+  toYear?: number;
   /**
    * Wird bei jedem Klick auf "Stationen suchen" inkrementiert.
    * Dadurch wird der automatische Zoom (fitBounds) nur nach einer Suche ausgeführt.
@@ -33,7 +33,6 @@ export default function StationsMap(props: {
   fitToRadiusNonce?: number;
 }) {
   useEffect(() => {
-    // Fix Leaflet default marker icons in bundlers/Next.js
     type IconDefaultProto = { _getIconUrl?: unknown };
     const proto = L.Icon.Default.prototype as unknown as IconDefaultProto;
     if (proto._getIconUrl) delete proto._getIconUrl;
@@ -60,8 +59,8 @@ export default function StationsMap(props: {
           <Popup>
             <div className="text-sm font-semibold">
               <Link
-                href={makeStationDetailHref(s.id, props.minYear, props.maxYear)}
-                className="text-blue-700 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500/40 rounded"
+                href={makeStationDetailHref(s.id, props.fromYear, props.toYear)}
+                className="rounded text-blue-700 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500/40"
                 aria-label={`Station öffnen: ${s.name} (${s.id})`}
               >
                 {s.name}
@@ -85,13 +84,17 @@ export default function StationsMap(props: {
   );
 }
 
-function makeStationDetailHref(stationId: string, minYear?: number, maxYear?: number): string {
+function makeStationDetailHref(stationId: string, fromYear?: number, toYear?: number): string {
   const base = `/station/${encodeURIComponent(stationId)}`;
-  if (typeof minYear !== 'number' || typeof maxYear !== 'number') return base;
+  if (typeof fromYear !== 'number' || typeof toYear !== 'number') return base;
 
   const usp = new URLSearchParams();
-  usp.set('minYear', String(minYear));
-  usp.set('maxYear', String(maxYear));
+  // beide Namenskonventionen setzen => Station-Seite ist robust gegen alte/neue Parameternamen
+  usp.set('fromYear', String(fromYear));
+  usp.set('toYear', String(toYear));
+  usp.set('minYear', String(fromYear));
+  usp.set('maxYear', String(toYear));
+
   return `${base}?${usp.toString()}`;
 }
 
@@ -105,18 +108,13 @@ function FitToRadius(props: { center: { lat: number; lon: number }; radiusKm: nu
     const lat = props.center.lat;
     const lon = props.center.lon;
 
-    // Defensive Guards gegen ungültige Werte
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(props.radiusKm)) return;
 
     const radiusMeters = Math.max(0, props.radiusKm) * 1000;
 
-    // WICHTIG: KEIN L.circle(...).getBounds() verwenden -> kann ohne _map crashen (layerPointToLatLng).
-    // Stattdessen Bounds rein geometrisch erzeugen:
-    // toBounds(sizeInMeters) => boundary ist size/2 entfernt -> für Radius r: size = 2r
-    const bounds =
-      radiusMeters > 0 ? L.latLng(lat, lon).toBounds(radiusMeters * 2) : L.latLng(lat, lon).toBounds(1);
+    // Stabiler als L.circle(...).getBounds() (vermeidet Leaflet-interne _map / layerPointToLatLng-Fehler)
+    const bounds = radiusMeters > 0 ? L.latLng(lat, lon).toBounds(radiusMeters * 2) : L.latLng(lat, lon).toBounds(1);
 
-    // Slightly delayed, damit Leaflet die Containergröße sicher kennt.
     const id = window.requestAnimationFrame(() => {
       map.invalidateSize();
       map.fitBounds(bounds, {

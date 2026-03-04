@@ -2,7 +2,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAggregates } from '../../../lib/api';
 import {
@@ -57,16 +57,39 @@ const validateYears = (fromYear: number, toYear: number) => {
   return null;
 };
 
+function parseYearParam(sp: ReturnType<typeof useSearchParams>, key: string): number | null {
+  const raw = sp.get(key);
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.trunc(n);
+  if (!Number.isFinite(i)) return null;
+  return i;
+}
+
+function getInitialYears(sp: ReturnType<typeof useSearchParams>): { from: number; to: number } {
+  // Unterstütze beide Namenskonventionen:
+  // - Station-Seite historisch: fromYear/toYear
+  // - Explore-Seite: minYear/maxYear
+  const from = parseYearParam(sp, 'fromYear') ?? parseYearParam(sp, 'minYear') ?? 2018;
+  const to = parseYearParam(sp, 'toYear') ?? parseYearParam(sp, 'maxYear') ?? 2025;
+
+  // Sanity: falls jemand unsinnige URLs baut
+  if (from > to) return { from, to: from };
+  return { from, to };
+}
+
 export default function StationPage() {
   const { push } = useToast();
 
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
 
   const stationId = String(params?.id ?? '');
 
-  const initialFrom = Number(searchParams.get('fromYear') ?? 2018);
-  const initialTo = Number(searchParams.get('toYear') ?? 2025);
+  const { from: initialFrom, to: initialTo } = useMemo(() => getInitialYears(searchParams), [searchParams]);
 
   // Form state (no auto-refetch on every keystroke)
   const [fromYearInput, setFromYearInput] = useState(initialFrom);
@@ -120,8 +143,18 @@ export default function StationPage() {
     if (validation) return;
 
     const changed = fromYear !== fromYearInput || toYear !== toYearInput;
+
     setFromYear(fromYearInput);
     setToYear(toYearInput);
+
+    // URL synchron halten (und sowohl min/max als auch from/to setzen)
+    // => Direkt aus Explore kommende Links und künftig geteilte Station-Links funktionieren konsistent.
+    const next = new URLSearchParams(searchParams.toString());
+    next.set('fromYear', String(fromYearInput));
+    next.set('toYear', String(toYearInput));
+    next.set('minYear', String(fromYearInput));
+    next.set('maxYear', String(toYearInput));
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
 
     if (!changed) void refetch();
   };
