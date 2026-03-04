@@ -1,31 +1,41 @@
-# ADR 0002: NOAA Initialimport bis 2025, danach Offline-Betrieb
+# ADR 0002: NOAA Initialimport bis 2025, danach Offline‑Betrieb
 
 ## Status
+
 Accepted
+
+## Kontext
+
+Die Anwendung soll auf realen NOAA/NCEI‑Rohdaten basieren, aber im Demo‑/Abnahmebetrieb ohne externe Datenabhängigkeit laufen. Gleichzeitig muss der Start reproduzierbar und idempotent sein.
+
+Der Datenimport ist in den Use‑Cases als Systemfunktion beschrieben (UC‑04).
 
 ## Entscheidung
 
-Die Anwendung lädt beim ersten produktiven Start das komplette NOAA GHCN Daily Dataset,
-begrenzt auf `year <= 2025`, und persistiert daraus:
+Beim ersten Start (bzw. bei aktivem Import) lädt das System das NOAA **GHCN Daily** Dataset (TMIN/TMAX), begrenzt auf `year <= 2025`, und persistiert daraus:
 
-- `Station`
-- `YearlyAggregate`
-- `SeasonalAggregate`
-- `SeedMeta` (Importstatus)
+* `Station`
+* `YearlyAggregate`
+* `SeasonalAggregate`
+* `SeedMeta` (Importstatus)
 
-Nach dem abgeschlossenen Initialimport arbeitet die Anwendung vollständig offline auf der
-lokalen PostgreSQL/PostGIS-Datenbank. `DailyObservation` bleibt im Schema, wird im
-Standardpfad aber nicht befüllt.
+Nach abgeschlossenem Initialimport arbeitet die Anwendung vollständig offline auf der lokalen PostgreSQL/PostGIS‑Datenbank.
 
 ## Begründung
 
-- Erfüllt MS2-Anforderung „NOAA als Quelle + lokaler Offline-Betrieb“.
-- Sehr schnelle API-Antwortzeiten durch Voraggregation.
-- Reproduzierbarer, idempotenter Startprozess durch `SeedMeta` + Advisory Lock.
-- Kein externer Datenzugriff mehr im laufenden Betrieb.
+* Erfüllt die Anforderung „NOAA als Quelle + lokaler Offline‑Betrieb“.
+* Sehr schnelle API‑Antwortzeiten durch Voraggregation (siehe ADR 0004).
+* Reproduzierbarer, idempotenter Import über `SeedMeta` + DB‑Lock.
+* CI kann auf ein kleines, deterministisches Seed‑Dataset umschalten.
 
-## Auswirkungen
+## Konsequenzen
 
-- Der erste Start kann sehr lange dauern (voller NOAA-Import).
-- Folgestarts sind schnell, da der Importer bei `COMPLETED` sofort endet.
-- CI nutzt weiterhin ein synthetisches Minimal-Seed und führt keinen NOAA-Download aus.
+* Der erste Import kann lange dauern und benötigt lokalen Speicher (DB + Cache).
+* Folgestarts sind schnell, weil der Importer bei `COMPLETED` sofort endet.
+* CI und lokale Entwicklung nutzen das Minimal‑Seed (siehe `docs/seed.md`).
+
+## Referenzen
+
+* UC‑04: `docs/use-cases/Use-Case 04.md`
+* Seed: `docs/seed.md`
+* ADR 0004: `docs/adr/0004-preaggregation-year-season.md`

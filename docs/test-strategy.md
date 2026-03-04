@@ -1,104 +1,171 @@
 # Test Strategy
 
 Ziel dieses Dokuments ist eine nachvollziehbare, pragmatische Teststrategie, die
-(a) die Kernfunktionalitäten absichert und (b) die Bewertungskriterien (Teststrategie, Coverage, Mocking/Stubbing, Verständlichkeit) unterstützt.
+
+* die Kernfunktionalitäten absichert und
+* die Bewertungskriterien (Teststrategie, Coverage, Mocking/Stubbing, Verständlichkeit) nachweisbar unterstützt.
 
 ## Scope & Qualitätsziele
 
-**Systemkontext:** Browser-basierte Web-App (Client) + API (Server) + Datenbank (Container-Stack).  
-**Kernfunktionalitäten (fachlich):**
-- Standort wählen (Koordinaten) und Stationen im Umkreis finden (Radius, Limit, Jahr-Filter).
-- Station auswählen und Temperatur-Aggregate (Jahr + meteorologische Jahreszeiten) **grafisch und tabellarisch** darstellen.
-- Eingabevalidierung/Fehlerfälle (ungültige Parameter, keine Stationen, Datenlücken).
+**Systemkontext:** Browser‑Web‑App (Client) + API (Server) + Datenbank (Docker‑Stack).
 
-**Nicht-funktional (prüf-/zeigbar):**
-- Reaktionsfähigkeit UI (Loading-States), robuste Fehlerbehandlung.
-- Barrierefreiheit: Tastaturbedienung, sichtbarer Fokus, sinnvolle ARIA-Attribute; Tabellen als Alternativdarstellung zu Charts.
-- Performance: Kernaktionen bei verfügbaren abhängigen Systemen schnell ausführbar.
+**Kern‑Use‑Cases:**
 
-## Testpyramide (Levels)
+* **UC‑01:** Stationen im Umkreis finden
+* **UC‑02:** Station auswählen
+* **UC‑03:** Stationsdaten anzeigen (Grafik + Tabelle)
+* **UC‑04:** Datenbasis bereitstellen/aktualisieren (Systemfunktion)
+
+Siehe: `docs/use-cases/`.
+
+## Testpyramide
 
 1. **Unit Tests (schnell, deterministisch)**
-   - Prüfen reine Logik, Formatierung, Validierung, Aggregationen.
-2. **Integration Tests (API/DB/HTTP, begrenzt)**
-   - Prüfen API-Endpunkte + DB-Schicht + Serialisierung/Validierung.
-3. **Smoke/E2E (wenige Happy-Paths)**
-   - Prüfen „läuft grundsätzlich“ im echten Stack (Web ↔ API ↔ DB) inkl. Navigation.
-4. **Systemtests/Abnahme (manuell + dokumentiert)**
-   - Prüfen fachliche Korrektheit anhand verifizierbarer Werte und definierter Testfälle. :contentReference[oaicite:0]{index=0}
 
-## Tools & Ausführung (konzeptionell)
+   * Pure Functions: Formatter, Validierung, Helper, Season‑Utilities.
 
-- **Test Runner Unit/Integration:** z. B. Vitest/Jest (projektabhängig).
-- **API HTTP Tests:** z. B. Supertest (oder äquivalent).
-- **E2E/Smoke:** z. B. Playwright/Cypress (minimaler Umfang).
-- **Coverage:** Coverage-Provider des Test-Runners → HTML-Report als CI-Artifact.
+2. **Integration Tests (API ↔ DB ↔ HTTP, gezielt)**
 
-> Hinweis: Konkrete Befehle/Script-Namen liegen in den jeweiligen `package.json`-Scripts. Die CI nutzt dieselben Scripts wie lokal.
+   * Endpunkte liefern erwartete Statuscodes, Payloads, Fehlerobjekte.
+   * DB‑Zugriff inkl. PostGIS‑Query‑Pfad.
+
+3. **Smoke/E2E (wenige Happy‑Paths, realer Stack)**
+
+   * Web ↔ API ↔ DB inkl. Navigation.
+
+4. **Systemtests/Abnahme (manuell, protokolliert)**
+
+   * Verifizierte Werte + dokumentierte Testfälle gemäß Aufgabenstellung.
+
+## Tooling
+
+* **Unit/Integration:** Vitest
+* **API HTTP:** Supertest (oder äquivalent) gegen Fastify‑Instanz
+* **E2E/Smoke:** Playwright (Tests im Ordner `tests`)
+* **Coverage:** Vitest Coverage → HTML/lcov
+
+## Traceability: Tests ↔ Use‑Cases
+
+### UC‑01 (Stationssuche im Umkreis)
+
+* Unit:
+
+  * Validierungsgrenzen (Koordinaten, Radius, Limit, Jahre)
+  * Helper/Formatter (z. B. Rundung)
+* Integration:
+
+  * `GET /api/stations/nearby` liefert sortierte Distanzliste
+  * Filter `minYear/maxYear` wirken korrekt
+* E2E:
+
+  * Explore‑Seite: Parameter setzen, Suche starten, Liste/Map aktualisiert
+
+### UC‑02 (Station auswählen)
+
+* E2E:
+
+  * Klick auf Station in Liste und/oder Map führt zur Detailseite
+  * URL enthält Station‑ID; Back‑Navigation funktioniert
+
+### UC‑03 (Stationsdaten anzeigen)
+
+* Unit:
+
+  * Mapping/Normalisierung/Formatter für Jahres‑ und Saison‑Zeitreihen
+  * Darstellung von Lücken (null) ohne Interpolation
+* Integration:
+
+  * `GET /api/stations/:id/aggregates` liefert Station + `yearly` + `seasonal`
+  * 404 bei unbekannter Station
+* E2E:
+
+  * Detailseite lädt Diagramm(e) + Tabelle(n)
+  * Filter `fromYear/toYear` wirkt
+
+### UC‑04 (Datenbasis bereitstellen/aktualisieren)
+
+* Integration:
+
+  * Seed‑Status (`/api/import/status`) liefert konsistente Statuswerte
+  * Minimal‑Seed ist deterministisch (CI)
+* Manuell/Abnahme:
+
+  * Erststart‑Import (NOAA) sichtbar im Log + Status
+  * Reset (`docker compose down -v`) → Import läuft erneut
 
 ## Unit Tests
 
-### API (Server)
+### Shared/Domain
+
 **Ziele:**
-- Validierung der Request-Parameter (Radius, Limit, Jahre, Koordinaten).
-- Distanzberechnung / Station-Filtern (Edge Cases, Grenzen).
-- Aggregationslogik (Jahresmittel/Season-Mittel, Umgang mit Datenlücken).
+
+* Season‑Mapping/Enums, stabile Serialisierung (Cache‑Keys), Formatter.
+* Edge‑Cases: Null‑Werte, Rundung, Parameter‑Normalisierung.
+
+### API (Server)
+
+**Ziele:**
+
+* Validierung der Request‑Parameter (Radius, Limit, Jahre, Koordinaten).
+* Ergebnis‑Stabilität: Distanzsortierung, Jahr‑Filter, Fehlerobjekte.
 
 **Mocking/Stubbing:**
-- Externe Datenquellen/Downloads (falls vorhanden) **mocken**.
-- DB-Repositories je nach Testziel:  
-  - reine Service-Logik: Repos mocken  
-  - DB-Integration: echte Test-DB (siehe Integration Tests)
 
-### Shared/Domain (falls vorhanden)
-- Pure Functions: Typen, Parser, Berechnungen, Helper.
+* Externe Datenquellen/Downloads (NOAA) werden in Unit‑Tests nicht ausgeführt.
 
 ### Web (Client)
-**Bewusster Coverage-Scope:**
-- **Unit-Tests decken gezielt `apps/web/lib/**` ab** (Logik/Formatter/Validierung).  
-- **UI/Routes** werden **nicht** breit per Component-Unit-Tests abgedeckt, sondern über **Smoke/E2E** und/oder **manuelle Abnahme** geprüft.
+
+**Bewusster Coverage‑Scope:**
+
+* Unit‑Tests decken gezielt `apps/web/lib/**` ab (Logik/Formatter/Validierung).
+* UI/Routes werden primär über Smoke/E2E und manuelle Abnahme geprüft.
 
 ## Integration Tests
 
 ### API ↔ DB
-**Ziele:**
-- Endpunkte liefern erwartete Statuscodes, Payloads, Fehlerobjekte.
-- DB-Migrationen/Schema-Kompatibilität im Testsetup.
-- Caching-Verhalten (sofern vorhanden) nur „black-box“ (z. B. repeated call schneller / weniger DB-Hits), ohne fragile Timings.
 
-**Test-DB:**
-- Bevorzugt isolierte, ephemeral DB (Container/Schema pro Run).
-- Seed-Daten klein und deterministisch.
+**Ziele:**
+
+* Endpunkte liefern erwartete Statuscodes, Payloads, Fehlerobjekte.
+* DB‑Migrations/Schema‑Kompatibilität im Testsetup.
+* Caching‑Verhalten nur „black‑box“ prüfen (repeat call → schneller), ohne fragile Timing‑Asserts.
+
+**Testdatenbasis:**
+
+* Deterministisches Minimal‑Seed (siehe `docs/seed.md`).
 
 ## Smoke / E2E (minimal, aber aussagekräftig)
 
 **Minimalumfang (Happy Path):**
-1. App lädt, Startseite erreichbar.
-2. Standort setzen → Stationen suchen → Station auswählen.
-3. Charts rendern + **unter jedem Chart** ist eine Tabelle vorhanden.
-4. Help-Modal erreichbar und schließbar.
 
-**Accessibility-Scope in Smoke/E2E:**
-- Tastaturbedienung: Fokus erreichbar, sichtbar, logische Tab-Reihenfolge.
-- ARIA-Attribute für Charts/Controls (mindestens Label/Description).
+1. App lädt, Explore‑Seite erreichbar.
+2. Standort setzen → Stationen suchen → Station auswählen.
+3. Detailseite zeigt Charts und **Tabelle als Alternative**.
+4. Fehlerfälle: ungültige Eingaben zeigen Validation‑Messages.
+
+**Accessibility‑Scope:**
+
+* Tastaturbedienung: Fokus erreichbar, sichtbar, logische Tab‑Reihenfolge.
+* Controls sind beschriftet (Labels/ARIA) und Status/Errors sind erkennbar.
 
 ## Systemtests & Abnahme (manuell dokumentiert)
 
-Gemäß Aufgabenstellung werden Systemtests mit verifizierten Werten durchgeführt und protokolliert:
-- **3 Standorte** mit geprüften Werten (verschiedene Kombinationen aus Radius, Zeitraum, Limit) :contentReference[oaicite:1]{index=1}  
-- je Standort **1 Station** mit geprüften Werten für **Gesamtjahr + Jahreszeiten** :contentReference[oaicite:2]{index=2}  
-- Durchführung protokollieren (Inputparameter, erwartete/observed Ergebnisse, Screenshots/Export).
+* **3 Standorte** mit geprüften Parametern (Radius, Zeitraum, Limit).
+* Pro Standort **1 Station** mit geprüften Werten für Jahr + Saisons.
+* Protokollierung: Input‑Parameter, erwartete/observed Ergebnisse, Screenshots.
 
 ## Quality Gates (CI)
 
 CI soll mindestens:
-- Lint/Typecheck (falls vorhanden)
-- Unit/Integration Tests
-- Coverage-Report (HTML) als Artifact
-- Build (Web/API)
-- Container-Images bauen und nach GHCR pushen (Tags: `latest` und `sha-...`)
 
-## Coverage & Nachweis
+* Lint/Typecheck
+* Unit/Integration Tests
+* Coverage‑Report (HTML) als Artifact
+* Build (Web/API)
+* Container‑Images bauen und nach GHCR pushen (Tags: `latest` und `sha-...`)
 
-- Coverage wird als HTML-Report erzeugt und in CI als Artifact abgelegt (z. B. `coverage-report`).
-- Für den Termin: Artifact lokal herunterladen, `index.html` öffnen und bei Bedarf zeigen.
+## Referenzen
+
+* Use‑Cases: `docs/use-cases/`
+* Seed: `docs/seed.md`
+* ADRs: `docs/adr/`
