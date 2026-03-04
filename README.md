@@ -5,7 +5,7 @@ Client‑Server‑Webanwendung zur Suche und Visualisierung von Temperaturdaten 
 * **Web**: Next.js 14 (App Router), TypeScript, TailwindCSS, Leaflet + OpenStreetMap, Apache ECharts
 * **API**: Fastify (Node.js 20), Zod‑Validierung, Prisma, serverseitiger LRU‑Cache
 * **Datenhaltung**: PostgreSQL 16 + PostGIS (Geo‑Queries, Distanzsortierung)
-* **Importer**: One‑shot NOAA‑Initialimport (bis inkl. 2025) + Offline‑Betrieb danach (SeedMeta)
+* **Importer**: One‑shot NOAA‑Initialimport (optional) + Offline‑Betrieb (SeedMeta)
 
 Die funktionalen Anforderungen sind als Use‑Cases beschrieben (`docs/use-cases/`). Die Architekturentscheidungen sind über ADRs dokumentiert (`docs/adr/`).
 
@@ -17,7 +17,7 @@ Die funktionalen Anforderungen sind als Use‑Cases beschrieben (`docs/use-cases
 * [Installation (Docker über GHCR)](#installation-docker-über-ghcr)
 * [Konfiguration (Environment Variablen)](#konfiguration-environment-variablen)
 * [Lokale Entwicklung](#lokale-entwicklung)
-* [Performance-/Load-Test](#performanceload-test)
+* [Performance-/Load-Test](#performance-load-test)
 * [Testabdeckung](#testabdeckung)
 * [Caching-Strategie (TTL, Key-Design)](#caching-strategie-ttl-key-design)
 * [API Endpoints](#api-endpoints)
@@ -41,16 +41,28 @@ cp .env.example .env
 docker compose up --build
 ```
 
+### Welche Datenbasis wird verwendet?
+
+Es gibt drei Betriebsarten (absteigend nach Datenumfang):
+
+1. **Offline‑Demo‑Dataset (empfohlen für Abnahme/Präsentation)**: Voraggregierte Daten werden aus einem Archiv in die DB restored (schneller Start, ohne Internet).
+2. **NOAA‑Initialimport**: Importer lädt NOAA‑Daten und schreibt Voraggregationen (kann lange dauern, internetabhängig).
+3. **Minimal‑Seed**: Reproduzierbare Testdatenbasis für CI/Dev/Perf (schnell, kleiner Umfang).
+
+Details zur Seed‑Strategie: `docs/seed.md`.
+
 ### Was passiert beim ersten Start?
 
 1. `db` startet (Postgres + PostGIS).
-2. `importer` lädt NOAA‑Daten und schreibt Voraggregationen (kann lange dauern).
-3. Danach starten `api` und `web`.
+2. `seed_restore` stellt – falls vorhanden/aktiviert – ein **Offline‑Demo‑Dataset** aus `seed/offline-demo-db.sql.gz` wieder her.
+3. `importer` führt Prisma‑Migrations aus und startet optional den NOAA‑Import (steuerbar über `NOAA_IMPORT_ENABLED`).
+4. Danach starten `api` und `web`.
 
 ### Was passiert bei späteren Starts?
 
-* `importer` erkennt `SeedMeta=COMPLETED` und beendet sich sofort.
-* `api`/`web` starten normal und schnell.
+* `seed_restore` überspringt die Wiederherstellung, wenn die DB bereits Daten enthält.
+* `importer` erkennt `SeedMeta=COMPLETED` (oder `NOAA_IMPORT_ENABLED=0`) und beendet sich schnell.
+* `api`/`web` starten normal.
 
 ### URLs
 
@@ -85,9 +97,14 @@ docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
+### Offline‑Demo‑Dataset aktiv nutzen
+
+* Archiv ablegen: `seed/offline-demo-db.sql.gz`
+* Standardmäßig versucht `seed_restore` beim Start zu restoren (konfigurierbar über `OFFLINE_SEED_*`).
+
 ### NOAA Import optional aktivieren
 
-Standardmäßig ist der Import für die Abnahme **deaktiviert** (schneller Start). Aktivieren:
+Standardmäßig ist der NOAA‑Import für die Abnahme **deaktiviert** (schneller Start). Aktivieren:
 
 ```bash
 NOAA_IMPORT_ENABLED=1 docker compose -f docker-compose.ghcr.yml up -d
@@ -114,6 +131,12 @@ Die wichtigsten Variablen werden über `.env` gesetzt bzw. im Compose weitergere
 
 * `CACHE_TTL_MINUTES` – TTL in Minuten (Default: `10`)
 * `CACHE_MAX_ENTRIES` – max. Einträge (Default: `500`)
+
+### Offline Demo Seed (Voraggregierte Daten als Archiv)
+
+* `OFFLINE_SEED_ENABLED` – Restore aus Archiv beim Start (Default: `1`)
+* `OFFLINE_SEED_FILE` – Pfad im Container (Default: `/repo/seed/offline-demo-db.sql.gz`)
+* `OFFLINE_SEED_FORCE` – erzwingt Restore (Drop Schema + Restore)
 
 ### Importer (NOAA)
 
@@ -294,13 +317,18 @@ Tagging:
 
 ### Import dauert sehr lange / wirkt „hängend“
 
-* Beim Erststart ist das erwartbar (Initialimport).
+* Beim erstmaligen NOAA‑Initialimport ist das erwartbar.
 * Prüfen Sie den Import‑Status: `http://localhost:3001/api/import/status`
+
+### Offline‑Demo‑Dataset wird nicht verwendet
+
+* Prüfen Sie, ob ein Archiv vorhanden ist: `seed/offline-demo-db.sql.gz`
+* Prüfen Sie die Variablen: `OFFLINE_SEED_ENABLED`, `OFFLINE_SEED_FILE`
 
 ### Import erneut erzwingen
 
 ```bash
-NOAA_IMPORT_FORCE=1 docker compose up --build
+NOAA_IMPORT_ENABLED=1 NOAA_IMPORT_FORCE=1 docker compose up --build
 ```
 
 ### Komplett zurücksetzen

@@ -16,13 +16,69 @@ services:
       retries: 20
       start_period: 10s
 
+  # Optional: Restore an offline/pre-aggregated demo dataset into the DB (fast startup).
+  # - Expects a dump at: ./seed/offline-demo-db.sql.gz (repo is mounted read-only to /repo)
+  # - Skips automatically if DB already contains data (unless OFFLINE_SEED_FORCE=1).
+  seed_restore:
+    image: postgis/postgis:16-3.4
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: ghcn
+      OFFLINE_SEED_ENABLED: ${OFFLINE_SEED_ENABLED:-1}
+      OFFLINE_SEED_FORCE: ${OFFLINE_SEED_FORCE:-0}
+      OFFLINE_SEED_FILE: ${OFFLINE_SEED_FILE:-/repo/seed/offline-demo-db.sql.gz}
+    volumes:
+      - ./:/repo:ro
+    command:
+      - sh
+      - -c
+      - |
+          set -e
+          if [ "$${OFFLINE_SEED_ENABLED:-1}" != "1" ]; then
+            echo "Offline seed restore disabled (OFFLINE_SEED_ENABLED=$${OFFLINE_SEED_ENABLED:-1})"
+            exit 0
+          fi
+
+          f="$${OFFLINE_SEED_FILE:-/repo/seed/offline-demo-db.sql.gz}"
+          if [ ! -f "$${f}" ]; then
+            echo "Offline seed archive not found ($${f}) – skipping restore"
+            exit 0
+          fi
+
+          # Check whether the DB already contains station data
+          tableExists=$$(psql -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='Station'" 2>/dev/null || echo 0)
+          if [ "$${OFFLINE_SEED_FORCE:-0}" != "1" ] && [ "$${tableExists}" != "0" ]; then
+            cnt=$$(psql -tAc 'SELECT COUNT(*) FROM public."Station"' 2>/dev/null || echo 0)
+            if [ "$${cnt}" -gt 0 ]; then
+              echo "DB already contains data ($${cnt} stations) – skipping offline seed restore"
+              exit 0
+            fi
+          fi
+
+          if [ "$${OFFLINE_SEED_FORCE:-0}" = "1" ]; then
+            echo "OFFLINE_SEED_FORCE=1 – dropping public schema before restore"
+            psql -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO postgres; CREATE EXTENSION IF NOT EXISTS postgis;'
+          fi
+
+          echo "Restoring offline seed from $${f} ..."
+          gzip -dc "$${f}" | psql -v ON_ERROR_STOP=1
+          echo "Offline seed restore completed"
+    restart: "no"
+
   importer:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/ghcn?schema=public
-      NOAA_IMPORT_ENABLED: ${NOAA_IMPORT_ENABLED:-1}
+      # Für Abnahme/Abgabe default AUS (schneller Start mit Offline-Seed). Aktivieren via env falls gewünscht.
+      NOAA_IMPORT_ENABLED: ${NOAA_IMPORT_ENABLED:-0}
       NOAA_IMPORT_FORCE: ${NOAA_IMPORT_FORCE:-0}
       NOAA_END_YEAR: ${NOAA_END_YEAR:-2025}
       NOAA_CACHE_DIR: /data/noaa-cache
@@ -30,6 +86,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      seed_restore:
+        condition: service_completed_successfully
     volumes:
       - noaa_cache:/data/noaa-cache
     command:

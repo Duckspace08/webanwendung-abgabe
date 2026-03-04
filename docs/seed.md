@@ -6,7 +6,46 @@ Diese Minimal‑Seed ist bewusst unabhängig vom NOAA‑Initialimport und stellt
 
 Der Seed‑Prozess ist Teil des System‑Use‑Cases **UC‑04** („Datenbasis bereitstellen/aktualisieren“) und ermöglicht die Ausführung der Benutzer‑Use‑Cases **UC‑01** bis **UC‑03** ohne NOAA‑Download.
 
-## Enthaltene Daten
+---
+
+## Offline‑Demo‑Dataset (Voraggregierte Daten als Archiv)
+
+Zur Reduktion der Import‑/Startzeit kann optional ein **vorkonfiguriertes Daten‑Archiv** (Schema + Daten + Voraggregationen) im Repository abgelegt werden. Beim Start mit Docker Compose stellt der Service `seed_restore` diese Daten automatisiert wieder her.
+
+* **Ablageort (konventionell):** `seed/offline-demo-db.sql.gz`
+* **Ziel:** schneller Start, keine Abhängigkeit von Internet/NOAA‑Downloads, konsistente Demo‑Daten für Abnahme/Präsentation.
+
+### Aktivierung
+
+* `OFFLINE_SEED_ENABLED=1` (Default)
+* Optional erzwingen: `OFFLINE_SEED_FORCE=1`
+* Datei im Container: `OFFLINE_SEED_FILE=/repo/seed/offline-demo-db.sql.gz`
+
+### Verhalten beim Start
+
+* Ist das Archiv vorhanden und `OFFLINE_SEED_ENABLED=1`, wird die DB wiederhergestellt.
+* Enthält die DB bereits Daten, wird der Restore standardmäßig übersprungen.
+* Mit `OFFLINE_SEED_FORCE=1` wird die DB (Schema `public`) vor dem Restore zurückgesetzt.
+
+### Erzeugung des Archives (Beispiel)
+
+1. System einmalig mit vollem Import laufen lassen (NOAA Import aktiv).
+2. Dump aus dem DB‑Container erstellen und komprimieren:
+
+```bash
+mkdir -p seed
+# System starten und Import durchführen (Beispiel)
+NOAA_IMPORT_ENABLED=1 docker compose up -d
+
+# Danach: Dump erzeugen
+docker compose exec -T db sh -c 'pg_dump -U postgres -d ghcn --no-owner --no-privileges' | gzip > seed/offline-demo-db.sql.gz
+```
+
+Hinweis: Das Dump sollte **Schema + Daten** enthalten (inkl. `_prisma_migrations`), damit `pnpm prisma migrate deploy` danach idempotent bleibt.
+
+---
+
+## Enthaltene Daten (Minimal‑Seed)
 
 ### Stationen
 
@@ -41,6 +80,8 @@ Hinweis: Die API‑Kernendpunkte lesen im Runtime‑Betrieb primär die **Aggreg
 
 Die Voraggregation ist durch ADR **0004** begründet.
 
+---
+
 ## Saison‑Konvention im Minimal‑Seed
 
 Meteorologische Jahreszeiten:
@@ -65,6 +106,8 @@ Einordnung:
 * Für CI/Perf ist das unkritisch, da die Kernlogik (Geo‑Suche + Aggregat‑Read) deterministisch bleibt.
 * Für den NOAA‑Initialimport wird die Datenbasis dagegen hart bei `<= NOAA_END_YEAR` gehalten (siehe ADR 0004 / ADR 0002).
 
+---
+
 ## Warum genügt das für CI/Tests?
 
 * **UC‑01** benötigt: `Station` + PostGIS Geo‑Queries
@@ -72,12 +115,16 @@ Einordnung:
 * Diese Tabellen sind im Seed vollständig abgedeckt.
 * Der NOAA‑Import ist für CI nicht notwendig und wäre zu langsam bzw. netzwerkabhängig.
 
+---
+
 ## Bezug zu Performance-/Load‑Tests
 
 Der Performance‑Test (`pnpm perf`) nutzt typische Parameter gegen diese Seed:
 
 * `GET /api/stations/nearby` – Suche um Berlin, Radius 500 km, Limit 10, Zeitraum 2018–2025
 * `GET /api/stations/:id/aggregates` – Aggregationen für eine Seed‑Station (Standard: `DE-001`)
+
+---
 
 ## Referenzen
 

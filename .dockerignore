@@ -25,3 +25,7 @@ docs
 # OS noise
 .DS_Store
 Thumbs.db
+
+# Offline demo dataset archives (mount at runtime; keep out of Docker build context)
+seed
+seed/**
