@@ -37,8 +37,13 @@ const stations = [
   { id: 'CA-001', name: 'Toronto Pearson', latitude: 43.68, longitude: -79.63, elevation: 173 },
 ];
 
+// Wichtig für „Winter 2025 = Dez 2025 + Jan/Feb 2026“: mindestens bis 2026 seeden.
 const startYear = 2015;
-const endYear = 2025;
+const endYear = 2026;
+
+type MonthlyAcc = { tminSum: number; tminCount: number; tmaxSum: number; tmaxCount: number };
+
+const toFixed2 = (value: number | null) => (value === null ? null : Number(value.toFixed(2)));
 
 const gaussianNoise = () => {
   let u = 0;
@@ -81,19 +86,20 @@ const seed = async () => {
   }
 
   const dailyRows: Prisma.DailyObservationCreateManyInput[] = [];
-  const yearlyMap = new Map<string, { tminSum: number; tminCount: number; tmaxSum: number; tmaxCount: number }>();
-  const seasonalMap = new Map<
-    string,
-    { tminSum: number; tminCount: number; tmaxSum: number; tmaxCount: number; season: string; year: number }
-  >();
+
+  // Monatsakkus sind die Basis der meteorologischen Mittel:
+  // Monatsmittel = Mittel der Tageswerte; Jahres-/Saisonmittel = Mittel der Monatsmittel.
+  const monthlyMap = new Map<string, MonthlyAcc>(); // stationId::year::month -> sums/counts
 
   for (const station of stations) {
     for (let year = startYear; year <= endYear; year += 1) {
       const isLeapYear = new Date(Date.UTC(year, 1, 29)).getUTCMonth() === 1;
       const daysInYear = isLeapYear ? 366 : 365;
+
       for (let day = 0; day < daysInYear; day += 1) {
         const date = new Date(Date.UTC(year, 0, 1 + day));
         const dayOfYear = day + 1;
+
         const { tminC, tmaxC } = generateTemperatureForDay(station.latitude, dayOfYear);
 
         const tmin = Math.random() < 0.03 ? null : Number(tminC.toFixed(1));
@@ -107,72 +113,143 @@ const seed = async () => {
           tmaxC: tmax,
         });
 
-        const yearKey = `${station.id}::${year}`;
-        const yearly = yearlyMap.get(yearKey) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
-        if (typeof tmin === 'number') {
-          yearly.tminSum += tmin;
-          yearly.tminCount += 1;
-        }
-        if (typeof tmax === 'number') {
-          yearly.tmaxSum += tmax;
-          yearly.tmaxCount += 1;
-        }
-        yearlyMap.set(yearKey, yearly);
-
         const month = date.getUTCMonth() + 1;
-        const { season, seasonYear } = getSeasonForMonth(year, month);
-        const seasonKey = `${station.id}::${seasonYear}::${season}`;
-        const seasonal = seasonalMap.get(seasonKey) ?? {
-          tminSum: 0,
-          tminCount: 0,
-          tmaxSum: 0,
-          tmaxCount: 0,
-          season,
-          year: seasonYear,
-        };
+        const monthKey = `${station.id}::${year}::${month}`;
+        const m = monthlyMap.get(monthKey) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
+
         if (typeof tmin === 'number') {
-          seasonal.tminSum += tmin;
-          seasonal.tminCount += 1;
+          m.tminSum += tmin;
+          m.tminCount += 1;
         }
         if (typeof tmax === 'number') {
-          seasonal.tmaxSum += tmax;
-          seasonal.tmaxCount += 1;
+          m.tmaxSum += tmax;
+          m.tmaxCount += 1;
         }
-        seasonalMap.set(seasonKey, seasonal);
+
+        monthlyMap.set(monthKey, m);
       }
     }
   }
 
+  // --- YearlyAggregate (Jahresmittel aus 12 Monatsmitteln) ---
   const yearlyRows: Prisma.YearlyAggregateCreateManyInput[] = [];
+
+  for (const station of stations) {
+    for (let year = startYear; year <= endYear; year += 1) {
+      let tminMonthSum = 0;
+      let tmaxMonthSum = 0;
+      const tminMonths = new Set<number>();
+      const tmaxMonths = new Set<number>();
+      let tminDays = 0;
+      let tmaxDays = 0;
+
+      for (let month = 1; month <= 12; month += 1) {
+        const m = monthlyMap.get(`${station.id}::${year}::${month}`);
+        if (!m) continue;
+
+        if (m.tminCount > 0) {
+          tminMonthSum += m.tminSum / m.tminCount;
+          tminMonths.add(month);
+          tminDays += m.tminCount;
+        }
+        if (m.tmaxCount > 0) {
+          tmaxMonthSum += m.tmaxSum / m.tmaxCount;
+          tmaxMonths.add(month);
+          tmaxDays += m.tmaxCount;
+        }
+      }
+
+      const avgTminC = tminMonths.size === 12 ? toFixed2(tminMonthSum / 12) : null;
+      const avgTmaxC = tmaxMonths.size === 12 ? toFixed2(tmaxMonthSum / 12) : null;
+
+      if (avgTminC === null && avgTmaxC === null) continue;
+
+      yearlyRows.push({
+        id: randomUUID(),
+        stationId: station.id,
+        year,
+        avgTminC,
+        avgTmaxC,
+        daysCountTmin: tminDays,
+        daysCountTmax: tmaxDays,
+      });
+    }
+  }
+
+  // --- SeasonalAggregate (Saisonmittel aus 3 Monatsmitteln; Winter/Sommer cross-year via seasonYear) ---
+  type SeasonAcc = {
+    stationId: string;
+    year: number;
+    season: string;
+    tminMonthSum: number;
+    tmaxMonthSum: number;
+    tminMonths: Set<number>;
+    tmaxMonths: Set<number>;
+    tminDays: number;
+    tmaxDays: number;
+  };
+
+  const seasonalAcc = new Map<string, SeasonAcc>(); // stationId::seasonYear::season
+
+  for (const station of stations) {
+    for (let year = startYear; year <= endYear; year += 1) {
+      for (let month = 1; month <= 12; month += 1) {
+        const m = monthlyMap.get(`${station.id}::${year}::${month}`);
+        if (!m) continue;
+
+        const { season, seasonYear } = getSeasonForMonth(year, month, { latitude: station.latitude });
+        const key = `${station.id}::${seasonYear}::${season}`;
+
+        const acc =
+          seasonalAcc.get(key) ??
+          ({
+            stationId: station.id,
+            year: seasonYear,
+            season,
+            tminMonthSum: 0,
+            tmaxMonthSum: 0,
+            tminMonths: new Set<number>(),
+            tmaxMonths: new Set<number>(),
+            tminDays: 0,
+            tmaxDays: 0,
+          } satisfies SeasonAcc);
+
+        if (m.tminCount > 0) {
+          acc.tminMonthSum += m.tminSum / m.tminCount;
+          acc.tminMonths.add(month);
+          acc.tminDays += m.tminCount;
+        }
+        if (m.tmaxCount > 0) {
+          acc.tmaxMonthSum += m.tmaxSum / m.tmaxCount;
+          acc.tmaxMonths.add(month);
+          acc.tmaxDays += m.tmaxCount;
+        }
+
+        seasonalAcc.set(key, acc);
+      }
+    }
+  }
+
   const seasonalRows: Prisma.SeasonalAggregateCreateManyInput[] = [];
 
-  yearlyMap.forEach((value, key) => {
-    const [stationId, yearString] = key.split('::');
-    const year = Number(yearString);
-    yearlyRows.push({
-      id: randomUUID(),
-      stationId,
-      year,
-      avgTminC: value.tminCount ? Number((value.tminSum / value.tminCount).toFixed(2)) : null,
-      avgTmaxC: value.tmaxCount ? Number((value.tmaxSum / value.tmaxCount).toFixed(2)) : null,
-      daysCountTmin: value.tminCount,
-      daysCountTmax: value.tmaxCount,
-    });
-  });
+  for (const [, acc] of seasonalAcc) {
+    const avgTminC = acc.tminMonths.size === 3 ? toFixed2(acc.tminMonthSum / 3) : null;
+    const avgTmaxC = acc.tmaxMonths.size === 3 ? toFixed2(acc.tmaxMonthSum / 3) : null;
 
-  seasonalMap.forEach((value, key) => {
-    const [stationId] = key.split('::');
+    // Keine Teil-Saisons persistieren (z. B. nur Dez ohne Jan/Feb).
+    if (avgTminC === null && avgTmaxC === null) continue;
+
     seasonalRows.push({
       id: randomUUID(),
-      stationId,
-      year: value.year,
-      season: value.season as Prisma.Season,
-      avgTminC: value.tminCount ? Number((value.tminSum / value.tminCount).toFixed(2)) : null,
-      avgTmaxC: value.tmaxCount ? Number((value.tmaxSum / value.tmaxCount).toFixed(2)) : null,
-      daysCountTmin: value.tminCount,
-      daysCountTmax: value.tmaxCount,
+      stationId: acc.stationId,
+      year: acc.year,
+      season: acc.season as Prisma.Season,
+      avgTminC,
+      avgTmaxC,
+      daysCountTmin: acc.tminDays,
+      daysCountTmax: acc.tmaxDays,
     });
-  });
+  }
 
   await prisma.dailyObservation.createMany({ data: dailyRows, skipDuplicates: true });
   await prisma.yearlyAggregate.createMany({ data: yearlyRows, skipDuplicates: true });

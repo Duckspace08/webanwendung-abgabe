@@ -4,7 +4,8 @@ import readline from 'node:readline';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
-import { Prisma, PrismaClient, Season, SeedImportStatus } from '@prisma/client';
+import { Prisma, PrismaClient, Season as PrismaSeason, SeedImportStatus } from '@prisma/client';
+import { getSeasonForMonth } from '@webanwendung/shared';
 
 const prisma = new PrismaClient();
 
@@ -30,13 +31,6 @@ type StationRow = {
 };
 
 type Accumulator = { tminSum: number; tminCount: number; tmaxSum: number; tmaxCount: number };
-
-const getSeason = (month: number): Season => {
-  if (month >= 3 && month <= 5) return Season.SPRING;
-  if (month >= 6 && month <= 8) return Season.SUMMER;
-  if (month >= 9 && month <= 11) return Season.AUTUMN;
-  return Season.WINTER;
-};
 
 const toFixedNumber = (value: number | null) => (value === null ? null : Number(value.toFixed(2)));
 
@@ -213,16 +207,25 @@ const purgeSyntheticData = async () => {
   console.log('[importer] synthetic dataset purged');
 };
 
-const parseDlyLine = (line: string, yearly: Map<number, Accumulator>, seasonal: Map<string, Accumulator>) => {
+/**
+ * Accumulates DAILY sums/counts into a per-month bucket.
+ * Later we compute:
+ * - monthly means from daily values
+ * - yearly means from the 12 monthly means
+ * - seasonal means from the 3 monthly means (meteorological seasons)
+ */
+const parseDlyLine = (line: string, monthly: Map<string, Accumulator>) => {
   const year = Number(line.slice(11, 15));
   if (!Number.isFinite(year) || year > END_YEAR) return;
 
   const month = Number(line.slice(15, 17));
+  if (!Number.isFinite(month) || month < 1 || month > 12) return;
+
   const element = line.slice(17, 21);
   if (element !== 'TMIN' && element !== 'TMAX') return;
 
-  const season = getSeason(month);
-  const seasonKey = `${year}:${season}`;
+  const monthKey = `${year}-${month}`;
+  const monthAcc = monthly.get(monthKey) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
 
   for (let dayIndex = 0; dayIndex < 31; dayIndex += 1) {
     const base = 21 + dayIndex * 8;
@@ -234,24 +237,16 @@ const parseDlyLine = (line: string, yearly: Map<number, Accumulator>, seasonal: 
 
     const celsius = value / 10;
 
-    const yearAcc = yearly.get(year) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
-    const seasonAcc = seasonal.get(seasonKey) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
-
     if (element === 'TMIN') {
-      yearAcc.tminSum += celsius;
-      yearAcc.tminCount += 1;
-      seasonAcc.tminSum += celsius;
-      seasonAcc.tminCount += 1;
+      monthAcc.tminSum += celsius;
+      monthAcc.tminCount += 1;
     } else {
-      yearAcc.tmaxSum += celsius;
-      yearAcc.tmaxCount += 1;
-      seasonAcc.tmaxSum += celsius;
-      seasonAcc.tmaxCount += 1;
+      monthAcc.tmaxSum += celsius;
+      monthAcc.tmaxCount += 1;
     }
-
-    yearly.set(year, yearAcc);
-    seasonal.set(seasonKey, seasonAcc);
   }
+
+  monthly.set(monthKey, monthAcc);
 };
 
 const flushAggregates = async (
@@ -268,7 +263,11 @@ const flushAggregates = async (
   }
 };
 
-const importDlyTar = async (tarGzPath: string, allowedStationIds: Set<string>) => {
+const importDlyTar = async (
+  tarGzPath: string,
+  allowedStationIds: Set<string>,
+  stationLatitudeById: Map<string, number>,
+) => {
   const yearlyRows: Prisma.YearlyAggregateCreateManyInput[] = [];
   const seasonalRows: Prisma.SeasonalAggregateCreateManyInput[] = [];
 
@@ -281,34 +280,133 @@ const importDlyTar = async (tarGzPath: string, allowedStationIds: Set<string>) =
   });
 
   let currentStation: string | null = null;
-  let yearly: Map<number, Accumulator> = new Map();
-  let seasonal: Map<string, Accumulator> = new Map();
+  let monthly: Map<string, Accumulator> = new Map();
+
+  type YearAgg = {
+    tminMonthSum: number;
+    tminMonths: Set<number>;
+    tminDays: number;
+    tmaxMonthSum: number;
+    tmaxMonths: Set<number>;
+    tmaxDays: number;
+  };
+
+  type SeasonAgg = {
+    year: number; // seasonYear
+    season: PrismaSeason;
+    tminMonthSum: number;
+    tminMonths: Set<number>;
+    tminDays: number;
+    tmaxMonthSum: number;
+    tmaxMonths: Set<number>;
+    tmaxDays: number;
+  };
 
   const commitStation = async () => {
     if (!currentStation) return;
     if (!allowedStationIds.has(currentStation)) return;
 
-    for (const [year, acc] of yearly) {
+    const latitude = stationLatitudeById.get(currentStation);
+
+    const yearlyAgg = new Map<number, YearAgg>();
+    const seasonalAgg = new Map<string, SeasonAgg>(); // seasonYear:season
+
+    for (const [key, acc] of monthly) {
+      const [yearStr, monthStr] = key.split('-');
+      const year = Number(yearStr);
+      const month = Number(monthStr);
+      if (!Number.isFinite(year) || !Number.isFinite(month)) continue;
+
+      const tminMean = acc.tminCount ? acc.tminSum / acc.tminCount : null;
+      const tmaxMean = acc.tmaxCount ? acc.tmaxSum / acc.tmaxCount : null;
+
+      // --- Yearly aggregation: mean of the 12 monthly means ---
+      const y =
+        yearlyAgg.get(year) ??
+        ({
+          tminMonthSum: 0,
+          tminMonths: new Set<number>(),
+          tminDays: 0,
+          tmaxMonthSum: 0,
+          tmaxMonths: new Set<number>(),
+          tmaxDays: 0,
+        } satisfies YearAgg);
+
+      if (tminMean !== null) {
+        y.tminMonthSum += tminMean;
+        y.tminMonths.add(month);
+        y.tminDays += acc.tminCount;
+      }
+      if (tmaxMean !== null) {
+        y.tmaxMonthSum += tmaxMean;
+        y.tmaxMonths.add(month);
+        y.tmaxDays += acc.tmaxCount;
+      }
+
+      yearlyAgg.set(year, y);
+
+      // --- Seasonal aggregation: mean of the 3 monthly means, seasonYear by December year ---
+      const { season, seasonYear } = getSeasonForMonth(year, month, typeof latitude === 'number' ? { latitude } : undefined);
+      const seasonKey = `${seasonYear}:${season}`;
+      const s =
+        seasonalAgg.get(seasonKey) ??
+        ({
+          year: seasonYear,
+          season: season as PrismaSeason,
+          tminMonthSum: 0,
+          tminMonths: new Set<number>(),
+          tminDays: 0,
+          tmaxMonthSum: 0,
+          tmaxMonths: new Set<number>(),
+          tmaxDays: 0,
+        } satisfies SeasonAgg);
+
+      if (tminMean !== null) {
+        s.tminMonthSum += tminMean;
+        s.tminMonths.add(month);
+        s.tminDays += acc.tminCount;
+      }
+      if (tmaxMean !== null) {
+        s.tmaxMonthSum += tmaxMean;
+        s.tmaxMonths.add(month);
+        s.tmaxDays += acc.tmaxCount;
+      }
+
+      seasonalAgg.set(seasonKey, s);
+    }
+
+    for (const [year, agg] of yearlyAgg) {
+      const avgTminC = agg.tminMonths.size === 12 ? toFixedNumber(agg.tminMonthSum / 12) : null;
+      const avgTmaxC = agg.tmaxMonths.size === 12 ? toFixedNumber(agg.tmaxMonthSum / 12) : null;
+
+      // Skip incomplete calendar years (meteorological convention: 12 monthly means)
+      if (avgTminC === null && avgTmaxC === null) continue;
+
       yearlyRows.push({
         stationId: currentStation,
         year,
-        avgTminC: toFixedNumber(acc.tminCount ? acc.tminSum / acc.tminCount : null),
-        avgTmaxC: toFixedNumber(acc.tmaxCount ? acc.tmaxSum / acc.tmaxCount : null),
-        daysCountTmin: acc.tminCount,
-        daysCountTmax: acc.tmaxCount,
+        avgTminC,
+        avgTmaxC,
+        daysCountTmin: agg.tminDays,
+        daysCountTmax: agg.tmaxDays,
       });
     }
 
-    for (const [key, acc] of seasonal) {
-      const [yearString, seasonRaw] = key.split(':');
+    for (const [, agg] of seasonalAgg) {
+      const avgTminC = agg.tminMonths.size === 3 ? toFixedNumber(agg.tminMonthSum / 3) : null;
+      const avgTmaxC = agg.tmaxMonths.size === 3 ? toFixedNumber(agg.tmaxMonthSum / 3) : null;
+
+      // Skip partial seasons (e.g., only December without Jan/Feb).
+      if (avgTminC === null && avgTmaxC === null) continue;
+
       seasonalRows.push({
         stationId: currentStation,
-        year: Number(yearString),
-        season: seasonRaw as Season,
-        avgTminC: toFixedNumber(acc.tminCount ? acc.tminSum / acc.tminCount : null),
-        avgTmaxC: toFixedNumber(acc.tmaxCount ? acc.tmaxSum / acc.tmaxCount : null),
-        daysCountTmin: acc.tminCount,
-        daysCountTmax: acc.tmaxCount,
+        year: agg.year,
+        season: agg.season,
+        avgTminC,
+        avgTmaxC,
+        daysCountTmin: agg.tminDays,
+        daysCountTmax: agg.tmaxDays,
       });
     }
 
@@ -326,11 +424,10 @@ const importDlyTar = async (tarGzPath: string, allowedStationIds: Set<string>) =
     if (currentStation !== stationId) {
       await commitStation();
       currentStation = stationId;
-      yearly = new Map();
-      seasonal = new Map();
+      monthly = new Map();
     }
 
-    parseDlyLine(line, yearly, seasonal);
+    parseDlyLine(line, monthly);
   }
 
   await commitStation();
@@ -387,13 +484,15 @@ const runImport = async () => {
     const stations = await parseStations(stationsPath);
     const inventory = await parseInventory(inventoryPath);
     const stationRows = buildStationRows(stations, inventory);
+
     const allowedStationIds = new Set(stationRows.map((s) => s.id));
+    const stationLatitudeById = new Map(stationRows.map((s) => [s.id, s.latitude] as const));
 
     console.log(`[importer] upserting ${stationRows.length} stations`);
     await upsertStations(stationRows);
 
     console.log('[importer] importing aggregates from dly tar.gz');
-    await importDlyTar(tarPath, allowedStationIds);
+    await importDlyTar(tarPath, allowedStationIds, stationLatitudeById);
 
     await purgeSyntheticData();
 

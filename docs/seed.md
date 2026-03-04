@@ -54,11 +54,11 @@ Hinweis: Das Dump sollte **Schema + Daten** enthalten (inkl. `_prisma_migrations
 
   * Koordinaten (Latitude/Longitude)
   * `geom` als PostGIS‑Geography (für `ST_DWithin`/`ST_Distance`)
-  * `firstYear`/`lastYear` (typisch 2015–2025)
+  * `firstYear`/`lastYear` (typisch 2015–2026)
 
 ### Synthetische Tageswerte
 
-* Zeitraum: **2015 bis 2025**
+* Zeitraum: **2015 bis 2026**
 * Werte:
 
   * `tminC` / `tmaxC` werden aus einer saisonalen Funktion (Latitude + Sinus) + Rauschen erzeugt.
@@ -66,45 +66,73 @@ Hinweis: Das Dump sollte **Schema + Daten** enthalten (inkl. `_prisma_migrations
 
 Hinweis: Die API‑Kernendpunkte lesen im Runtime‑Betrieb primär die **Aggregat‑Tabellen**. Die synthetischen Tageswerte dienen im Seed dazu, Aggregationen deterministisch zu erzeugen.
 
-### Voraggregationen
+---
+
+## Meteorologische Aggregation (wie im NOAA‑Import)
+
+Die Voraggregation folgt dem meteorologischen Vorgehen:
+
+1. **Monatsmittel**: Mittelwert der Tageswerte je Monat (für `TMIN` und `TMAX` getrennt).
+2. **Jahresmittel**: Mittelwert der **12 Monatsmittel** eines Jahres.
+3. **Saisonmittel**: Mittelwert der **3 Monatsmittel** einer meteorologischen Saison.
+
+Teiljahre/Teilsaisons werden nicht persistiert (z. B. nur Dez ohne Jan/Feb).
+
+---
+
+## Voraggregationen
 
 * `YearlyAggregate` (Jahr)
 
   * `avgTminC`, `avgTmaxC`
-  * `daysCountTmin`, `daysCountTmax`
+  * `daysCountTmin`, `daysCountTmax` (Summe der verwendeten Tageswerte)
 
 * `SeasonalAggregate` (meteorologische Jahreszeiten)
 
   * `SPRING`, `SUMMER`, `AUTUMN`, `WINTER`
   * `avgTminC`, `avgTmaxC`
+  * `daysCountTmin`, `daysCountTmax`
 
 Die Voraggregation ist durch ADR **0004** begründet.
 
 ---
 
-## Saison‑Konvention im Minimal‑Seed
+## Saison‑Konvention (meteorologisch, inkl. Südhalbkugel)
 
-Meteorologische Jahreszeiten:
+### Nordhalbkugel
 
 * `SPRING` = Monate 3–5
 * `SUMMER` = Monate 6–8
 * `AUTUMN` = Monate 9–11
 * `WINTER` = Monate 12, 1, 2
 
-### seasonYear bei `WINTER`
+**seasonYear‑Regel (WINTER):** Saison wird nach dem **Dezember‑Jahr** benannt.
 
-Im Minimal‑Seed kann eine Konvention verwendet werden, bei der:
+* Beispiel: **Winter 2025 = Dezember 2025 + Januar 2026 + Februar 2026**
+* Ableitung: `seasonYear = year` für Dezember, `seasonYear = year - 1` für Januar/Februar.
 
-* **Dezember** dem **Winter des Folgejahres** zugeordnet wird (z. B. Dezember 2025 → `WINTER` 2026).
+### Südhalbkugel
 
-Auswirkung:
+Die Jahreszeiten sind umgedreht (invertiert):
 
-* Obwohl Tageswerte im Bereich **2015–2025** liegen, kann ein saisonales `year` außerhalb dieses Bereichs auftreten.
+* Wenn auf der Nordhalbkugel `WINTER` ist, ist auf der Südhalbkugel `SUMMER`.
+* Entsprechend gilt: `SPRING` ↔ `AUTUMN` und `SUMMER` ↔ `WINTER`.
 
-Einordnung:
+Das Mapping erfolgt über das Vorzeichen der Stations‑Latitude:
 
-* Für CI/Perf ist das unkritisch, da die Kernlogik (Geo‑Suche + Aggregat‑Read) deterministisch bleibt.
-* Für den NOAA‑Initialimport wird die Datenbasis dagegen hart bei `<= NOAA_END_YEAR` gehalten (siehe ADR 0004 / ADR 0002).
+* `latitude < 0` → Südhalbkugel
+* sonst → Nordhalbkugel
+
+---
+
+## Hinweis zum NOAA‑Initialimport und „letztem Winter“
+
+Wenn die Datenbasis hart bei `NOAA_END_YEAR` endet, ist der letzte **vollständig berechenbare** Winter typischerweise `NOAA_END_YEAR - 1` (weil Januar/Februar des Folgejahres fehlen können).
+
+Beispiel:
+
+* `NOAA_END_YEAR=2025` enthält Dezember 2025, aber **nicht** Januar/Februar 2026 → **Winter 2025** wäre unvollständig und wird nicht persistiert.
+* Für **Winter 2025** (Dez 2025 + Jan/Feb 2026) muss die Datenbasis mindestens bis **2026** reichen.
 
 ---
 
