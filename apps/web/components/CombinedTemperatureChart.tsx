@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 
 const round1 = (v: number | null | undefined) =>
@@ -11,7 +11,7 @@ const format1 = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v
 type YearlyRow = { year: number; avgTminC: number | null; avgTmaxC: number | null };
 type SeasonalRow = { year: number; season: string; avgTminC: number | null; avgTmaxC: number | null };
 
-type SeriesKey =
+export type SeriesKey =
   | 'TMIN-YR'
   | 'TMIN-SP'
   | 'TMIN-SU'
@@ -22,6 +22,8 @@ type SeriesKey =
   | 'TMAX-SU'
   | 'TMAX-AU'
   | 'TMAX-WI';
+
+export type LegendSelected = Record<SeriesKey, boolean>;
 
 const SEASON_TO_ABBR: Partial<Record<string, 'SP' | 'SU' | 'AU' | 'WI'>> = {
   SPRING: 'SP',
@@ -53,7 +55,7 @@ const COLORS: Record<SeriesKey, string> = {
   'TMIN-WI': '#f59e0b', // amber (Komplement zu blauviolett)
 };
 
-const SERIES_ORDER: SeriesKey[] = [
+export const SERIES_ORDER: SeriesKey[] = [
   'TMIN-YR',
   'TMIN-SP',
   'TMIN-SU',
@@ -68,11 +70,11 @@ const SERIES_ORDER: SeriesKey[] = [
 
 const DEFAULT_SELECTED: ReadonlySet<SeriesKey> = new Set<SeriesKey>(['TMIN-YR', 'TMAX-YR']);
 
-const createDefaultLegendSelected = (): Record<string, boolean> =>
+export const createDefaultLegendSelected = (): LegendSelected =>
   SERIES_ORDER.reduce((acc, key) => {
     acc[key] = DEFAULT_SELECTED.has(key);
     return acc;
-  }, {} as Record<string, boolean>);
+  }, {} as LegendSelected);
 
 const createSeriesData = (len: number): Record<SeriesKey, Array<number | null>> =>
   SERIES_ORDER.reduce((acc, key) => {
@@ -87,6 +89,8 @@ export const CombinedTemperatureChart = ({
   toYear,
   ariaLabel,
   tableId,
+  legendSelected: legendSelectedProp,
+  onLegendSelectedChange,
 }: {
   yearly: YearlyRow[];
   seasonal: SeasonalRow[];
@@ -98,10 +102,27 @@ export const CombinedTemperatureChart = ({
   toYear?: number;
   ariaLabel?: string;
   tableId?: string;
+
+  /**
+   * Optional (controlled): Legenden-Auswahl. Wenn gesetzt, wird die Auswahl extern gesteuert.
+   * Dadurch kann z. B. die Tabelle Spalten basierend auf der Auswahl ein-/ausblenden.
+   */
+  legendSelected?: LegendSelected;
+  onLegendSelectedChange?: (next: LegendSelected) => void;
 }) => {
   // Default: nur TMIN-YR und TMAX-YR aktiv; alle anderen per Legend-Click aktivierbar.
-  // Persistiert die Auswahl über Re-Renders hinweg (z. B. beim Refetch / Range-Wechsel).
-  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>(() => createDefaultLegendSelected());
+  // Falls `legendSelected` nicht von außen gesteuert wird, verwaltet diese Komponente die Auswahl intern.
+  const [internalLegendSelected, setInternalLegendSelected] = useState<LegendSelected>(() => createDefaultLegendSelected());
+
+  const legendSelected: LegendSelected = legendSelectedProp ?? internalLegendSelected;
+
+  const commitLegendSelected = useCallback(
+    (next: LegendSelected) => {
+      if (onLegendSelectedChange) onLegendSelectedChange(next);
+      else setInternalLegendSelected(next);
+    },
+    [onLegendSelectedChange]
+  );
 
   const { years, seriesData } = useMemo(() => {
     const hasValidRange =
@@ -185,25 +206,26 @@ export const CombinedTemperatureChart = ({
     return { years, seriesData };
   }, [yearly, seasonal, fromYear, toYear]);
 
+  const applySelectedPatch = useCallback(
+    (patch: Record<string, boolean> | undefined) => {
+      if (!patch) return;
+
+      const next = { ...legendSelected } as LegendSelected;
+      for (const key of SERIES_ORDER) {
+        if (typeof patch[key] === 'boolean') next[key] = patch[key];
+      }
+      commitLegendSelected(next);
+    },
+    [commitLegendSelected, legendSelected]
+  );
+
   const onEvents = useMemo(
     () => ({
-      legendselectchanged: (e: any) => {
-        const selected = e?.selected as Record<string, boolean> | undefined;
-        if (!selected) return;
-        setLegendSelected((prev) => ({ ...prev, ...selected }));
-      },
-      legendselectall: (e: any) => {
-        const selected = e?.selected as Record<string, boolean> | undefined;
-        if (!selected) return;
-        setLegendSelected((prev) => ({ ...prev, ...selected }));
-      },
-      legendinverseselect: (e: any) => {
-        const selected = e?.selected as Record<string, boolean> | undefined;
-        if (!selected) return;
-        setLegendSelected((prev) => ({ ...prev, ...selected }));
-      },
+      legendselectchanged: (e: any) => applySelectedPatch(e?.selected as Record<string, boolean> | undefined),
+      legendselectall: (e: any) => applySelectedPatch(e?.selected as Record<string, boolean> | undefined),
+      legendinverseselect: (e: any) => applySelectedPatch(e?.selected as Record<string, boolean> | undefined),
     }),
-    []
+    [applySelectedPatch]
   );
 
   const option = useMemo(

@@ -1,10 +1,17 @@
+// apps/web/app/station/[id]/page.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAggregates } from '../../../lib/api';
-import { CombinedTemperatureChart } from '../../../components/CombinedTemperatureChart';
+import {
+  CombinedTemperatureChart,
+  SERIES_ORDER,
+  createDefaultLegendSelected,
+  type LegendSelected,
+  type SeriesKey,
+} from '../../../components/CombinedTemperatureChart';
 import { SeasonalChart } from '../../../components/SeasonalChart';
 import { ErrorBanner } from '../../../components/ErrorBanner';
 import { toUserMessage } from '../../../lib/errors';
@@ -22,21 +29,9 @@ const seasonToAbbr: Record<string, 'SP' | 'SU' | 'AU' | 'WI'> = {
   WINTER: 'WI',
 };
 
-type CombinedKey =
-  | 'TMIN-YR'
-  | 'TMIN-SP'
-  | 'TMIN-SU'
-  | 'TMIN-AU'
-  | 'TMIN-WI'
-  | 'TMAX-YR'
-  | 'TMAX-SP'
-  | 'TMAX-SU'
-  | 'TMAX-AU'
-  | 'TMAX-WI';
-
 type CombinedRow = {
   year: number;
-} & Record<CombinedKey, number | null>;
+} & Record<SeriesKey, number | null>;
 
 const toFixedOrDash = (v: number | null | undefined) =>
   typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : '—';
@@ -83,6 +78,14 @@ export default function StationPage() {
 
   const [season, setSeason] = useState<Season>('SUMMER');
   const [rangeError, setRangeError] = useState<string | null>(null);
+
+  // Legend selection drives BOTH chart + table column visibility
+  const [legendSelected, setLegendSelected] = useState<LegendSelected>(() => createDefaultLegendSelected());
+
+  const visibleSeries = useMemo<SeriesKey[]>(
+    () => SERIES_ORDER.filter((key) => Boolean(legendSelected[key])),
+    [legendSelected]
+  );
 
   const queryKey = useMemo(() => ['aggregates', stationId, fromYear, toYear], [stationId, fromYear, toYear]);
 
@@ -165,8 +168,8 @@ export default function StationPage() {
       const r = byYear.get(s.year);
       if (!r) continue;
 
-      const tminKey = `TMIN-${abbr}` as CombinedKey;
-      const tmaxKey = `TMAX-${abbr}` as CombinedKey;
+      const tminKey = `TMIN-${abbr}` as SeriesKey;
+      const tmaxKey = `TMAX-${abbr}` as SeriesKey;
       r[tminKey] = s.avgTminC ?? null;
       r[tmaxKey] = s.avgTmaxC ?? null;
     }
@@ -270,6 +273,8 @@ export default function StationPage() {
               fromYear={fromYear}
               toYear={toYear}
               tableId={combinedTableId}
+              legendSelected={legendSelected}
+              onLegendSelectedChange={setLegendSelected}
             />
           ) : (
             <SkeletonBlock className="h-[420px] w-full" label="Chart lädt…" />
@@ -280,37 +285,28 @@ export default function StationPage() {
           {combinedRows ? (
             <table id={combinedTableId} className="min-w-full text-sm text-slate-200">
               <caption className="sr-only">
-                Tabellarische Alternative: Jahres- und Saisonmittelwerte (TMIN/TMAX) pro Jahr
+                Tabellarische Alternative: Jahres- und Saisonmittelwerte (TMIN/TMAX) pro Jahr. Es werden nur die im Diagramm
+                ausgewählten Reihen als Spalten angezeigt.
               </caption>
               <thead className="text-left text-slate-400">
                 <tr>
                   <th className="py-2">Year</th>
-                  <th className="py-2">TMIN-YR</th>
-                  <th className="py-2">TMIN-SP</th>
-                  <th className="py-2">TMIN-SU</th>
-                  <th className="py-2">TMIN-AU</th>
-                  <th className="py-2">TMIN-WI</th>
-                  <th className="py-2">TMAX-YR</th>
-                  <th className="py-2">TMAX-SP</th>
-                  <th className="py-2">TMAX-SU</th>
-                  <th className="py-2">TMAX-AU</th>
-                  <th className="py-2">TMAX-WI</th>
+                  {visibleSeries.map((key) => (
+                    <th key={key} className="py-2">
+                      {key}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {combinedRows.map((row) => (
                   <tr key={row.year} className="border-t border-slate-800">
                     <td className="py-2">{row.year}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMIN-YR'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMIN-SP'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMIN-SU'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMIN-AU'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMIN-WI'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMAX-YR'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMAX-SP'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMAX-SU'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMAX-AU'])}</td>
-                    <td className="py-2">{toFixedOrDash(row['TMAX-WI'])}</td>
+                    {visibleSeries.map((key) => (
+                      <td key={`${row.year}-${key}`} className="py-2">
+                        {toFixedOrDash(row[key])}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
