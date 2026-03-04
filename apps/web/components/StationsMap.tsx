@@ -20,6 +20,13 @@ export default function StationsMap(props: {
   radiusKm: number;
   stations: Station[];
   /**
+   * Zeitraum aus der Explore Page.
+   * Wird beim Öffnen der Station als Query-Parameter weitergegeben,
+   * damit die erste Datenabfrage im Detail diesen Zeitraum nutzt.
+   */
+  minYear?: number;
+  maxYear?: number;
+  /**
    * Wird bei jedem Klick auf "Stationen suchen" inkrementiert.
    * Dadurch wird der automatische Zoom (fitBounds) nur nach einer Suche ausgeführt.
    */
@@ -52,7 +59,7 @@ export default function StationsMap(props: {
           <Popup>
             <div className="text-sm font-semibold">
               <Link
-                href={`/station/${encodeURIComponent(s.id)}`}
+                href={makeStationDetailHref(s.id, props.minYear, props.maxYear)}
                 className="text-blue-700 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500/40 rounded"
                 aria-label={`Station öffnen: ${s.name} (${s.id})`}
               >
@@ -75,6 +82,16 @@ export default function StationsMap(props: {
       ))}
     </MapContainer>
   );
+}
+
+function makeStationDetailHref(stationId: string, minYear?: number, maxYear?: number): string {
+  const base = `/station/${encodeURIComponent(stationId)}`;
+  if (typeof minYear !== 'number' || typeof maxYear !== 'number') return base;
+
+  const usp = new URLSearchParams();
+  usp.set('minYear', String(minYear));
+  usp.set('maxYear', String(maxYear));
+  return `${base}?${usp.toString()}`;
 }
 
 function FitToRadius(props: { center: { lat: number; lon: number }; radiusKm: number; fitToRadiusNonce: number }) {

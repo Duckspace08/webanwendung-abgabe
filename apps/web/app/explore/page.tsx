@@ -179,10 +179,38 @@ function makeQuery(params: NumericParams): string {
   return usp.toString();
 }
 
+function makeStationDetailHref(stationId: string, years?: { minYear: number; maxYear: number }): string {
+  const base = `/station/${encodeURIComponent(stationId)}`;
+  if (!years) return base;
+
+  const usp = new URLSearchParams();
+  usp.set('minYear', String(years.minYear));
+  usp.set('maxYear', String(years.maxYear));
+  return `${base}?${usp.toString()}`;
+}
+
+function getValidYearsFromForm(form: Pick<FormState, 'minYear' | 'maxYear'>): { minYear: number; maxYear: number } | null {
+  const minYear = toFiniteNumber(form.minYear);
+  const maxYear = toFiniteNumber(form.maxYear);
+
+  if (minYear === null || maxYear === null) return null;
+  if (minYear < LIMITS.year.min || minYear > LIMITS.year.max) return null;
+  if (maxYear < LIMITS.year.min || maxYear > LIMITS.year.max) return null;
+  if (minYear > maxYear) return null;
+
+  return { minYear: Math.round(minYear), maxYear: Math.round(maxYear) };
+}
+
 export default function ExplorePage() {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [errors, setErrors] = useState<FormErrors>({});
   const [formTouched, setFormTouched] = useState(false);
+
+  // Merkt sich den zuletzt (validierten) Zeitraum, damit Station-Links immer einen konsistenten Default-Zeitraum mitgeben.
+  const [lastUsedYears, setLastUsedYears] = useState<{ minYear: number; maxYear: number }>({
+    minYear: Number(DEFAULT_FORM.minYear),
+    maxYear: Number(DEFAULT_FORM.maxYear),
+  });
 
   // Trigger für "Fit-to-Radius" nach Klick auf "Stationen suchen".
   // (Die Karte soll NICHT bei jedem Tippen automatisch zoomen.)
@@ -239,6 +267,9 @@ export default function ExplorePage() {
     setErrors({});
     lastValidRef.current = result.params;
 
+    // Zeitraum für Station-Links/Station-Detailansicht merken
+    setLastUsedYears({ minYear: result.params.minYear, maxYear: result.params.maxYear });
+
     // Zoom/Viewport der Karte erst nach explizitem "Suchen" anpassen.
     setFitToRadiusNonce((n) => n + 1);
 
@@ -264,6 +295,12 @@ export default function ExplorePage() {
       setLoading(false);
     }
   }, [form]);
+
+  // Wenn der Nutzer den Zeitraum ändert (und er valide ist), soll dieser beim Öffnen einer Station übergeben werden –
+  // auch wenn er nicht erneut auf "Stationen suchen" klickt.
+  const effectiveYears = useMemo(() => {
+    return getValidYearsFromForm(form) ?? lastUsedYears;
+  }, [form.minYear, form.maxYear, lastUsedYears]);
 
   const anyErrors = Object.keys(errors).length > 0;
 
@@ -372,7 +409,7 @@ export default function ExplorePage() {
                 {stations.slice(0, 50).map((s) => (
                   <li key={s.id}>
                     <Link
-                      href={`/station/${encodeURIComponent(s.id)}`}
+                      href={makeStationDetailHref(s.id, effectiveYears)}
                       className="block rounded-lg border border-white/10 bg-black/10 px-3 py-2 hover:border-white/20 hover:bg-black/20 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
                       aria-label={`Station öffnen: ${s.name} (${s.id})`}
                     >
@@ -402,6 +439,8 @@ export default function ExplorePage() {
               radiusKm={preview.radiusKm}
               stations={stations}
               fitToRadiusNonce={fitToRadiusNonce}
+              minYear={effectiveYears.minYear}
+              maxYear={effectiveYears.maxYear}
             />
           </div>
         </div>
