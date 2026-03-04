@@ -184,6 +184,10 @@ export default function ExplorePage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [formTouched, setFormTouched] = useState(false);
 
+  // Trigger für "Fit-to-Radius" nach Klick auf "Stationen suchen".
+  // (Die Karte soll NICHT bei jedem Tippen automatisch zoomen.)
+  const [fitToRadiusNonce, setFitToRadiusNonce] = useState(0);
+
   const [stations, setStations] = useState<Station[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -234,6 +238,9 @@ export default function ExplorePage() {
 
     setErrors({});
     lastValidRef.current = result.params;
+
+    // Zoom/Viewport der Karte erst nach explizitem "Suchen" anpassen.
+    setFitToRadiusNonce((n) => n + 1);
 
     const query = makeQuery(result.params);
 
@@ -390,7 +397,12 @@ export default function ExplorePage() {
         <div className="rounded-2xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
           <h3 className="px-2 pb-3 text-sm font-semibold text-slate-100">Karte</h3>
           <div className="h-[360px] overflow-hidden rounded-xl border border-white/10">
-            <StationsMap center={{ lat: preview.lat, lon: preview.lon }} radiusKm={preview.radiusKm} stations={stations} />
+            <StationsMap
+              center={{ lat: preview.lat, lon: preview.lon }}
+              radiusKm={preview.radiusKm}
+              stations={stations}
+              fitToRadiusNonce={fitToRadiusNonce}
+            />
           </div>
         </div>
       </section>

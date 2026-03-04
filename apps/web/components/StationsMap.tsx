@@ -3,7 +3,7 @@
 import L from 'leaflet';
 import Link from 'next/link';
 import React, { useEffect } from 'react';
-import { Circle, MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
+import { Circle, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 
 type Station = {
   id: string;
@@ -19,6 +19,11 @@ export default function StationsMap(props: {
   center: { lat: number; lon: number };
   radiusKm: number;
   stations: Station[];
+  /**
+   * Wird bei jedem Klick auf "Stationen suchen" inkrementiert.
+   * Dadurch wird der automatische Zoom (fitBounds) nur nach einer Suche ausgeführt.
+   */
+  fitToRadiusNonce?: number;
 }) {
   useEffect(() => {
     type IconDefaultProto = { _getIconUrl?: unknown };
@@ -37,6 +42,9 @@ export default function StationsMap(props: {
   return (
     <MapContainer center={center} zoom={5} scrollWheelZoom className="h-full w-full">
       <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+      <FitToRadius center={props.center} radiusKm={props.radiusKm} fitToRadiusNonce={props.fitToRadiusNonce ?? 0} />
+
       <Circle center={center} radius={props.radiusKm * 1000} />
 
       {props.stations.slice(0, 200).map((s) => (
@@ -67,4 +75,30 @@ export default function StationsMap(props: {
       ))}
     </MapContainer>
   );
+}
+
+function FitToRadius(props: { center: { lat: number; lon: number }; radiusKm: number; fitToRadiusNonce: number }) {
+  const map = useMap();
+
+  useEffect(() => {
+    // Nicht beim initialen Render auto-zoomen, sondern erst nach expliziter Suche.
+    if (!props.fitToRadiusNonce) return;
+
+    const radiusMeters = Math.max(0, props.radiusKm) * 1000;
+    const bounds = L.circle([props.center.lat, props.center.lon], { radius: radiusMeters }).getBounds();
+
+    // Slightly delayed, damit Leaflet die Containergröße sicher kennt.
+    const id = window.requestAnimationFrame(() => {
+      map.invalidateSize();
+      map.fitBounds(bounds, {
+        padding: [40, 40],
+        maxZoom: 15,
+        animate: true,
+      });
+    });
+
+    return () => window.cancelAnimationFrame(id);
+  }, [map, props.center.lat, props.center.lon, props.radiusKm, props.fitToRadiusNonce]);
+
+  return null;
 }
