@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 
 const round1 = (v: number | null | undefined) =>
@@ -66,6 +66,14 @@ const SERIES_ORDER: SeriesKey[] = [
   'TMAX-WI',
 ];
 
+const DEFAULT_SELECTED: ReadonlySet<SeriesKey> = new Set<SeriesKey>(['TMIN-YR', 'TMAX-YR']);
+
+const createDefaultLegendSelected = (): Record<string, boolean> =>
+  SERIES_ORDER.reduce((acc, key) => {
+    acc[key] = DEFAULT_SELECTED.has(key);
+    return acc;
+  }, {} as Record<string, boolean>);
+
 const createSeriesData = (len: number): Record<SeriesKey, Array<number | null>> =>
   SERIES_ORDER.reduce((acc, key) => {
     acc[key] = len === 0 ? ([] as Array<number | null>) : Array.from({ length: len }, () => null);
@@ -91,6 +99,10 @@ export const CombinedTemperatureChart = ({
   ariaLabel?: string;
   tableId?: string;
 }) => {
+  // Default: nur TMIN-YR und TMAX-YR aktiv; alle anderen per Legend-Click aktivierbar.
+  // Persistiert die Auswahl über Re-Renders hinweg (z. B. beim Refetch / Range-Wechsel).
+  const [legendSelected, setLegendSelected] = useState<Record<string, boolean>>(() => createDefaultLegendSelected());
+
   const { years, seriesData } = useMemo(() => {
     const hasValidRange =
       Number.isInteger(fromYear) && Number.isInteger(toYear) && (fromYear as number) <= (toYear as number);
@@ -173,6 +185,27 @@ export const CombinedTemperatureChart = ({
     return { years, seriesData };
   }, [yearly, seasonal, fromYear, toYear]);
 
+  const onEvents = useMemo(
+    () => ({
+      legendselectchanged: (e: any) => {
+        const selected = e?.selected as Record<string, boolean> | undefined;
+        if (!selected) return;
+        setLegendSelected((prev) => ({ ...prev, ...selected }));
+      },
+      legendselectall: (e: any) => {
+        const selected = e?.selected as Record<string, boolean> | undefined;
+        if (!selected) return;
+        setLegendSelected((prev) => ({ ...prev, ...selected }));
+      },
+      legendinverseselect: (e: any) => {
+        const selected = e?.selected as Record<string, boolean> | undefined;
+        if (!selected) return;
+        setLegendSelected((prev) => ({ ...prev, ...selected }));
+      },
+    }),
+    []
+  );
+
   const option = useMemo(
     () => ({
       tooltip: {
@@ -195,6 +228,7 @@ export const CombinedTemperatureChart = ({
         bottom: 0,
         icon: 'rect',
         textStyle: { color: '#e2e8f0' },
+        selected: legendSelected,
       },
       grid: {
         left: 52,
@@ -237,7 +271,7 @@ export const CombinedTemperatureChart = ({
         };
       }),
     }),
-    [years, seriesData]
+    [years, seriesData, legendSelected]
   );
 
   return (
@@ -246,7 +280,7 @@ export const CombinedTemperatureChart = ({
       aria-label={ariaLabel ?? 'Diagramm: Jahres- und Saisonmittelwerte (TMIN/TMAX)'}
       aria-describedby={tableId}
     >
-      <ReactECharts option={option} style={{ height: 420 }} />
+      <ReactECharts option={option} style={{ height: 420 }} onEvents={onEvents} />
     </div>
   );
 };
