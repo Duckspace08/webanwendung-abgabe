@@ -33,6 +33,7 @@ export default function StationsMap(props: {
   fitToRadiusNonce?: number;
 }) {
   useEffect(() => {
+    // Fix Leaflet default marker icons in bundlers/Next.js
     type IconDefaultProto = { _getIconUrl?: unknown };
     const proto = L.Icon.Default.prototype as unknown as IconDefaultProto;
     if (proto._getIconUrl) delete proto._getIconUrl;
@@ -101,8 +102,19 @@ function FitToRadius(props: { center: { lat: number; lon: number }; radiusKm: nu
     // Nicht beim initialen Render auto-zoomen, sondern erst nach expliziter Suche.
     if (!props.fitToRadiusNonce) return;
 
+    const lat = props.center.lat;
+    const lon = props.center.lon;
+
+    // Defensive Guards gegen ungültige Werte
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(props.radiusKm)) return;
+
     const radiusMeters = Math.max(0, props.radiusKm) * 1000;
-    const bounds = L.circle([props.center.lat, props.center.lon], { radius: radiusMeters }).getBounds();
+
+    // WICHTIG: KEIN L.circle(...).getBounds() verwenden -> kann ohne _map crashen (layerPointToLatLng).
+    // Stattdessen Bounds rein geometrisch erzeugen:
+    // toBounds(sizeInMeters) => boundary ist size/2 entfernt -> für Radius r: size = 2r
+    const bounds =
+      radiusMeters > 0 ? L.latLng(lat, lon).toBounds(radiusMeters * 2) : L.latLng(lat, lon).toBounds(1);
 
     // Slightly delayed, damit Leaflet die Containergröße sicher kennt.
     const id = window.requestAnimationFrame(() => {
