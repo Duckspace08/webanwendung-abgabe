@@ -71,9 +71,10 @@ const seed = async () => {
   for (const station of stations) {
     await prisma.$executeRaw(
       Prisma.sql`
-        INSERT INTO "Station" ("id", "name", "latitude", "longitude", "elevation", "firstYear", "lastYear", "geom")
+        INSERT INTO "Station" ("id", "name", "latitude", "longitude", "elevation", "firstYear", "lastYear", "geom", "isSynthetic")
         VALUES (${station.id}, ${station.name}, ${station.latitude}, ${station.longitude}, ${station.elevation}, ${startYear}, ${endYear},
-          ST_SetSRID(ST_MakePoint(${station.longitude}, ${station.latitude}), 4326)::geography
+          ST_SetSRID(ST_MakePoint(${station.longitude}, ${station.latitude}), 4326)::geography,
+          TRUE
         );
       `,
     );

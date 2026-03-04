@@ -26,6 +26,7 @@ services:
       NOAA_IMPORT_FORCE: ${NOAA_IMPORT_FORCE:-0}
       NOAA_END_YEAR: ${NOAA_END_YEAR:-2025}
       NOAA_CACHE_DIR: /data/noaa-cache
+      NOAA_PURGE_SYNTHETIC: ${NOAA_PURGE_SYNTHETIC:-1}
     depends_on:
       db:
         condition: service_healthy

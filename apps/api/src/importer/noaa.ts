@@ -17,6 +17,7 @@ const BASE_URL = process.env.NOAA_BASE_URL ?? 'https://www.ncei.noaa.gov/pub/dat
 const CACHE_DIR = process.env.NOAA_CACHE_DIR ?? '/data/noaa-cache';
 const FORCE_IMPORT = process.env.NOAA_IMPORT_FORCE === '1';
 const IMPORT_ENABLED = process.env.NOAA_IMPORT_ENABLED !== '0';
+const PURGE_SYNTHETIC = process.env.NOAA_PURGE_SYNTHETIC !== '0';
 
 type StationRow = {
   id: string;
@@ -68,98 +69,89 @@ const downloadWithCache = async (fileName: string) => {
     throw new Error(`Failed to download ${url}: ${response.status}`);
   }
 
-  // Write to temp first to avoid partially cached files on interruption.
+  // Write to temp first to avoid partial
   const tmpPath = `${localPath}.tmp`;
-  try {
-    const nodeReadable = toNodeReadable(response.body as unknown);
-    await pipeline(nodeReadable, fs.createWriteStream(tmpPath));
-    await fs.promises.rename(tmpPath, localPath);
-  } catch (err) {
-    try {
-      if (fs.existsSync(tmpPath)) await fs.promises.unlink(tmpPath);
-    } catch {
-      // ignore cleanup errors
-    }
-    throw err;
-  }
+  await ensureDir(path.dirname(localPath));
+
+  await pipeline(toNodeReadable(response.body), fs.createWriteStream(tmpPath));
+  await fs.promises.rename(tmpPath, localPath);
 
   console.log(`[importer] download completed ${fileName}`);
   return localPath;
 };
 
-const parseStations = async (filePath: string) => {
-  const stations = new Map<
-    string,
-    { id: string; latitude: number; longitude: number; elevation: number | null; name: string }
-  >();
+const parseStations = async (stationsPath: string) => {
+  const map = new Map<string, { name: string; latitude: number; longitude: number; elevation: number | null }>();
 
-  const rl = readline.createInterface({ input: fs.createReadStream(filePath, 'utf8'), crlfDelay: Infinity });
+  const rl = readline.createInterface({
+    input: fs.createReadStream(stationsPath),
+    crlfDelay: Infinity,
+  });
+
   for await (const line of rl) {
-    if (!line.trim()) continue;
-
     const id = line.slice(0, 11).trim();
-    const latitude = Number(line.slice(12, 20).trim());
-    const longitude = Number(line.slice(21, 30).trim());
+    const latitude = Number(line.slice(12, 20));
+    const longitude = Number(line.slice(21, 30));
     const elevationRaw = line.slice(31, 37).trim();
+    const elevation = elevationRaw ? Number(elevationRaw) : null;
     const name = line.slice(41, 71).trim();
-
-    stations.set(id, {
-      id,
-      latitude,
-      longitude,
-      elevation: elevationRaw === '-999.9' || elevationRaw === '' ? null : Number(elevationRaw),
-      name,
-    });
+    if (!id || !Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+    map.set(id, { name, latitude, longitude, elevation });
   }
 
-  return stations;
+  return map;
 };
 
-const parseInventory = async (filePath: string) => {
-  const inventory = new Map<string, { tminFirst?: number; tminLast?: number; tmaxFirst?: number; tmaxLast?: number }>();
+const parseInventory = async (inventoryPath: string) => {
+  const map = new Map<string, { firstYear: number; lastYear: number }>();
 
-  const rl = readline.createInterface({ input: fs.createReadStream(filePath, 'utf8'), crlfDelay: Infinity });
+  const rl = readline.createInterface({
+    input: fs.createReadStream(inventoryPath),
+    crlfDelay: Infinity,
+  });
+
   for await (const line of rl) {
-    if (!line.trim()) continue;
-
-    const stationId = line.slice(0, 11).trim();
+    const id = line.slice(0, 11).trim();
     const element = line.slice(31, 35).trim();
     if (element !== 'TMIN' && element !== 'TMAX') continue;
 
-    const firstYear = Number(line.slice(36, 40).trim());
-    const lastYear = Number(line.slice(41, 45).trim());
-    const record = inventory.get(stationId) ?? {};
+    const firstYear = Number(line.slice(36, 40));
+    const lastYear = Number(line.slice(41, 45));
+    if (!id || !Number.isFinite(firstYear) || !Number.isFinite(lastYear)) continue;
 
-    if (element === 'TMIN') {
-      record.tminFirst = firstYear;
-      record.tminLast = lastYear;
+    const current = map.get(id);
+    if (!current) {
+      map.set(id, { firstYear, lastYear });
     } else {
-      record.tmaxFirst = firstYear;
-      record.tmaxLast = lastYear;
+      map.set(id, {
+        firstYear: Math.min(current.firstYear, firstYear),
+        lastYear: Math.max(current.lastYear, lastYear),
+      });
     }
-
-    inventory.set(stationId, record);
   }
 
-  return inventory;
+  return map;
 };
 
 const buildStationRows = (
-  stations: Awaited<ReturnType<typeof parseStations>>,
-  inventory: Awaited<ReturnType<typeof parseInventory>>,
+  stations: Map<string, { name: string; latitude: number; longitude: number; elevation: number | null }>,
+  inventory: Map<string, { firstYear: number; lastYear: number }>,
 ): StationRow[] => {
   const rows: StationRow[] = [];
 
-  for (const [stationId, station] of stations) {
-    const inv = inventory.get(stationId);
-    if (inv?.tminFirst == null || inv?.tminLast == null || inv?.tmaxFirst == null || inv?.tmaxLast == null) continue;
+  for (const [id, station] of stations) {
+    const inv = inventory.get(id);
+    if (!inv) continue;
 
-    // Use intersection of TMIN/TMAX availability and cap to END_YEAR
-    const firstYear = Math.max(inv.tminFirst, inv.tmaxFirst);
-    const lastYear = Math.min(inv.tminLast, inv.tmaxLast, END_YEAR);
-    if (firstYear > lastYear) continue;
-
-    rows.push({ ...station, firstYear, lastYear });
+    rows.push({
+      id,
+      name: station.name,
+      latitude: station.latitude,
+      longitude: station.longitude,
+      elevation: station.elevation,
+      firstYear: inv.firstYear,
+      lastYear: Math.min(inv.lastYear, END_YEAR),
+    });
   }
 
   return rows;
@@ -174,12 +166,12 @@ const upsertStations = async (stationRows: StationRow[]) => {
     const values = Prisma.join(
       batch.map(
         (s) =>
-          Prisma.sql`(${s.id}, ${s.name}, ${s.latitude}, ${s.longitude}, ${s.elevation}, ${s.firstYear}, ${s.lastYear}, ST_SetSRID(ST_MakePoint(${s.longitude}, ${s.latitude}),4326)::geography)`,
+          Prisma.sql`(${s.id}, ${s.name}, ${s.latitude}, ${s.longitude}, ${s.elevation}, ${s.firstYear}, ${s.lastYear}, ST_SetSRID(ST_MakePoint(${s.longitude}, ${s.latitude}),4326)::geography, FALSE)`,
       ),
     );
 
     await prisma.$executeRaw(Prisma.sql`
-      INSERT INTO "Station" ("id", "name", "latitude", "longitude", "elevation", "firstYear", "lastYear", "geom")
+      INSERT INTO "Station" ("id", "name", "latitude", "longitude", "elevation", "firstYear", "lastYear", "geom", "isSynthetic")
       VALUES ${values}
       ON CONFLICT ("id") DO UPDATE
       SET
@@ -189,9 +181,36 @@ const upsertStations = async (stationRows: StationRow[]) => {
         "elevation" = EXCLUDED."elevation",
         "firstYear" = EXCLUDED."firstYear",
         "lastYear" = EXCLUDED."lastYear",
-        "geom" = EXCLUDED."geom";
+        "geom" = EXCLUDED."geom",
+        "isSynthetic" = FALSE;
     `);
   }
+};
+
+const purgeSyntheticData = async () => {
+  if (!PURGE_SYNTHETIC) {
+    console.log('[importer] synthetic purge disabled by NOAA_PURGE_SYNTHETIC=0');
+    return;
+  }
+
+  const syntheticCount = await prisma.station.count({ where: { isSynthetic: true } });
+  if (syntheticCount === 0) return;
+
+  console.log(`[importer] purging synthetic dataset (${syntheticCount} stations)`);
+
+  await prisma.$transaction(async (tx) => {
+    const ids = await tx.station.findMany({ where: { isSynthetic: true }, select: { id: true } });
+    const stationIds = ids.map((s) => s.id);
+    if (stationIds.length === 0) return;
+
+    // Delete in FK-safe order
+    await tx.seasonalAggregate.deleteMany({ where: { stationId: { in: stationIds } } });
+    await tx.yearlyAggregate.deleteMany({ where: { stationId: { in: stationIds } } });
+    await tx.dailyObservation.deleteMany({ where: { stationId: { in: stationIds } } });
+    await tx.station.deleteMany({ where: { id: { in: stationIds } } });
+  });
+
+  console.log('[importer] synthetic dataset purged');
 };
 
 const parseDlyLine = (line: string, yearly: Map<number, Accumulator>, seasonal: Map<string, Accumulator>) => {
@@ -206,8 +225,11 @@ const parseDlyLine = (line: string, yearly: Map<number, Accumulator>, seasonal: 
   const seasonKey = `${year}:${season}`;
 
   for (let dayIndex = 0; dayIndex < 31; dayIndex += 1) {
-    const offset = 21 + dayIndex * 8;
-    const value = Number(line.slice(offset, offset + 5));
+    const base = 21 + dayIndex * 8;
+    const value = Number(line.slice(base, base + 5));
+    const mflag = line.slice(base + 5, base + 6);
+    const qflag = line.slice(base + 6, base + 7);
+    if (mflag.trim() || qflag.trim()) continue;
     if (value === -9999) continue;
 
     const celsius = value / 10;
@@ -236,104 +258,39 @@ const flushAggregates = async (
   yearlyRows: Prisma.YearlyAggregateCreateManyInput[],
   seasonalRows: Prisma.SeasonalAggregateCreateManyInput[],
 ) => {
-  if (yearlyRows.length > 0) {
+  if (yearlyRows.length) {
     await prisma.yearlyAggregate.createMany({ data: yearlyRows, skipDuplicates: true });
     yearlyRows.length = 0;
   }
-  if (seasonalRows.length > 0) {
+  if (seasonalRows.length) {
     await prisma.seasonalAggregate.createMany({ data: seasonalRows, skipDuplicates: true });
     seasonalRows.length = 0;
   }
-};
-
-const parseTarSize = (header: Buffer) => {
-  const octal = header.toString('utf8', 124, 136).replace(/\0/g, '').trim();
-  return octal ? Number.parseInt(octal, 8) : 0;
-};
-
-const parseTarName = (header: Buffer) => header.toString('utf8', 0, 100).replace(/\0/g, '').trim();
-
-const isZeroHeader = (header: Buffer) => header.every((value) => value === 0);
-
-const forEachTarEntry = async (tarGzPath: string, onEntry: (name: string, content: Buffer) => Promise<void>) => {
-  let buffer = Buffer.alloc(0);
-  let currentHeader: { name: string; size: number } | null = null;
-  let reachedEndOfArchive = false;
-
-  const parseBuffer = async () => {
-    // loop while we can make progress; avoids `while(true)` (eslint no-constant-condition)
-    let progressed = true;
-    while (progressed) {
-      progressed = false;
-      if (reachedEndOfArchive) return;
-
-      if (!currentHeader) {
-        if (buffer.length < 512) return;
-
-        const header = buffer.subarray(0, 512);
-        buffer = buffer.subarray(512);
-        progressed = true;
-
-        if (isZeroHeader(header)) {
-          reachedEndOfArchive = true;
-          buffer = Buffer.alloc(0);
-          currentHeader = null;
-          return;
-        }
-
-        currentHeader = { name: parseTarName(header), size: parseTarSize(header) };
-      }
-
-      if (currentHeader) {
-        const paddedSize = currentHeader.size + ((512 - (currentHeader.size % 512)) % 512);
-        if (buffer.length < paddedSize) return;
-
-        const content = Buffer.from(buffer.subarray(0, currentHeader.size));
-        buffer = buffer.subarray(paddedSize);
-
-        const { name } = currentHeader;
-        currentHeader = null;
-
-        progressed = true;
-        await onEntry(name, content);
-      }
-    }
-  };
-
-  const gunzipStream = fs.createReadStream(tarGzPath).pipe(createGunzip());
-  for await (const chunk of gunzipStream) {
-    if (reachedEndOfArchive) break;
-    buffer = Buffer.concat([buffer, chunk as Buffer]);
-    await parseBuffer();
-  }
-
-  await parseBuffer();
 };
 
 const importDlyTar = async (tarGzPath: string, allowedStationIds: Set<string>) => {
   const yearlyRows: Prisma.YearlyAggregateCreateManyInput[] = [];
   const seasonalRows: Prisma.SeasonalAggregateCreateManyInput[] = [];
 
-  await forEachTarEntry(tarGzPath, async (name, content) => {
-    if (!name.endsWith('.dly')) return;
+  const fileStream = fs.createReadStream(tarGzPath);
+  const gunzip = createGunzip();
 
-    const stationId = path.basename(name, '.dly');
+  const rl = readline.createInterface({
+    input: fileStream.pipe(gunzip),
+    crlfDelay: Infinity,
+  });
 
-    // Ensure we only import aggregates for stations we actually inserted/upserted (FK-safe).
-    if (!allowedStationIds.has(stationId)) return;
+  let currentStation: string | null = null;
+  let yearly: Map<number, Accumulator> = new Map();
+  let seasonal: Map<string, Accumulator> = new Map();
 
-    const yearly = new Map<number, Accumulator>();
-    const seasonal = new Map<string, Accumulator>();
-
-    const lines = content.toString('utf8').split(/\r?\n/);
-    for (const line of lines) {
-      if (!line) continue;
-      parseDlyLine(line, yearly, seasonal);
-    }
+  const commitStation = async () => {
+    if (!currentStation) return;
+    if (!allowedStationIds.has(currentStation)) return;
 
     for (const [year, acc] of yearly) {
       yearlyRows.push({
-        stationId,
+        stationId: currentStation,
         year,
         avgTminC: toFixedNumber(acc.tminCount ? acc.tminSum / acc.tminCount : null),
         avgTmaxC: toFixedNumber(acc.tmaxCount ? acc.tmaxSum / acc.tmaxCount : null),
@@ -343,10 +300,10 @@ const importDlyTar = async (tarGzPath: string, allowedStationIds: Set<string>) =
     }
 
     for (const [key, acc] of seasonal) {
-      const [yearRaw, seasonRaw] = key.split(':');
+      const [yearString, seasonRaw] = key.split(':');
       seasonalRows.push({
-        stationId,
-        year: Number(yearRaw),
+        stationId: currentStation,
+        year: Number(yearString),
         season: seasonRaw as Season,
         avgTminC: toFixedNumber(acc.tminCount ? acc.tminSum / acc.tminCount : null),
         avgTmaxC: toFixedNumber(acc.tmaxCount ? acc.tmaxSum / acc.tmaxCount : null),
@@ -359,8 +316,24 @@ const importDlyTar = async (tarGzPath: string, allowedStationIds: Set<string>) =
       await flushAggregates(yearlyRows, seasonalRows);
       console.log('[importer] aggregate batch flushed');
     }
-  });
+  };
 
+  for await (const line of rl) {
+    // tar header detection: GHCN dly files are concatenated; station id is first 11 chars
+    const stationId = line.slice(0, 11).trim();
+    if (!stationId) continue;
+
+    if (currentStation !== stationId) {
+      await commitStation();
+      currentStation = stationId;
+      yearly = new Map();
+      seasonal = new Map();
+    }
+
+    parseDlyLine(line, yearly, seasonal);
+  }
+
+  await commitStation();
   await flushAggregates(yearlyRows, seasonalRows);
 };
 
@@ -377,7 +350,9 @@ const runImport = async () => {
   try {
     const currentMeta = await prisma.seedMeta.findUnique({ where: { key: IMPORT_KEY } });
     if (currentMeta?.status === SeedImportStatus.COMPLETED && !FORCE_IMPORT) {
-      console.log('[importer] import already completed, exiting');
+      console.log('[importer] import already completed');
+      await purgeSyntheticData();
+      console.log('[importer] exiting');
       return;
     }
 
@@ -419,6 +394,8 @@ const runImport = async () => {
 
     console.log('[importer] importing aggregates from dly tar.gz');
     await importDlyTar(tarPath, allowedStationIds);
+
+    await purgeSyntheticData();
 
     await prisma.seedMeta.update({
       where: { key: IMPORT_KEY },

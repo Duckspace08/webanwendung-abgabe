@@ -42,10 +42,13 @@ model Station {
   lastYear   Int
   geom       Unsupported("geography(Point,4326)")
   createdAt  DateTime @default(now())
+  isSynthetic Boolean @default(false)
 
   observations       DailyObservation[]
   yearlyAggregates   YearlyAggregate[]
   seasonalAggregates SeasonalAggregate[]
+
+  @@index([isSynthetic])
 }
 
 model DailyObservation {
