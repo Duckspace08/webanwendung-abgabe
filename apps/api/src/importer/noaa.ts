@@ -67,17 +67,29 @@ const downloadWithCache = async (fileName: string) => {
   return localPath;
 };
 
-const purgeSyntheticStations = async () => {
-  if (!PURGE_SYNTHETIC) return;
+const purgeSyntheticData = async () => {
+  if (!PURGE_SYNTHETIC) {
+    console.log('[importer] synthetic purge disabled by NOAA_PURGE_SYNTHETIC=0');
+    return;
+  }
 
-  // Synthetic stations created by seed have ids like "DE-001", while NOAA stations are 11-char IDs.
-  await prisma.station.deleteMany({
-    where: {
-      OR: [{ id: { contains: '-' } }, { isNoaa: false }],
-    },
+  const syntheticCount = await prisma.station.count({ where: { isSynthetic: true } });
+  if (syntheticCount === 0) return;
+
+  console.log(`[importer] purging synthetic dataset (${syntheticCount} stations)`);
+
+  await prisma.$transaction(async (tx) => {
+    const ids = await tx.station.findMany({ where: { isSynthetic: true }, select: { id: true } });
+    const stationIds = ids.map((s) => s.id);
+    if (stationIds.length === 0) return;
+
+    await tx.seasonalAggregate.deleteMany({ where: { stationId: { in: stationIds } } });
+    await tx.yearlyAggregate.deleteMany({ where: { stationId: { in: stationIds } } });
+    await tx.dailyObservation.deleteMany({ where: { stationId: { in: stationIds } } });
+    await tx.station.deleteMany({ where: { id: { in: stationIds } } });
   });
 
-  console.log('[importer] purged synthetic stations');
+  console.log('[importer] synthetic dataset purged');
 };
 
 const loadStations = async (stationsPath: string) => {
@@ -123,23 +135,32 @@ const loadStations = async (stationsPath: string) => {
 };
 
 const upsertStations = async (stationRows: StationRow[]) => {
-  const chunkSize = 10_000;
+  const chunkSize = 1_000;
+
   for (let i = 0; i < stationRows.length; i += chunkSize) {
     const chunk = stationRows.slice(i, i + chunkSize);
 
-    await prisma.station.createMany({
-      data: chunk.map((s) => ({
-        id: s.id,
-        name: s.name,
-        latitude: s.latitude,
-        longitude: s.longitude,
-        elevation: s.elevation,
-        firstYear: s.firstYear,
-        lastYear: s.lastYear,
-        isNoaa: true,
-      })),
-      skipDuplicates: true,
-    });
+    const values = Prisma.join(
+      chunk.map(
+        (s) =>
+          Prisma.sql`(${s.id}, ${s.name}, ${s.latitude}, ${s.longitude}, ${s.elevation}, ${s.firstYear}, ${s.lastYear}, ST_SetSRID(ST_MakePoint(${s.longitude}, ${s.latitude}),4326)::geography, FALSE)`,
+      ),
+    );
+
+    await prisma.$executeRaw(Prisma.sql`
+      INSERT INTO "Station" ("id", "name", "latitude", "longitude", "elevation", "firstYear", "lastYear", "geom", "isSynthetic")
+      VALUES ${values}
+      ON CONFLICT ("id") DO UPDATE
+      SET
+        "name" = EXCLUDED."name",
+        "latitude" = EXCLUDED."latitude",
+        "longitude" = EXCLUDED."longitude",
+        "elevation" = EXCLUDED."elevation",
+        "firstYear" = EXCLUDED."firstYear",
+        "lastYear" = EXCLUDED."lastYear",
+        "geom" = EXCLUDED."geom",
+        "isSynthetic" = FALSE;
+    `);
   }
 
   console.log('[importer] stations upserted');
@@ -461,8 +482,9 @@ const runImport = async () => {
   try {
     const existingMeta = await prisma.seedMeta.findUnique({ where: { key: IMPORT_KEY } });
 
-    if (existingMeta?.status === SeedImportStatus.SUCCESS && existingMeta.endYear === END_YEAR && !FORCE_IMPORT) {
+    if (existingMeta?.status === SeedImportStatus.COMPLETED && existingMeta.endYear === END_YEAR && !FORCE_IMPORT) {
       console.log('[importer] already imported; skip');
+      await purgeSyntheticData();
       return;
     }
 
@@ -478,9 +500,6 @@ const runImport = async () => {
       update: { status: SeedImportStatus.RUNNING, endYear: END_YEAR, startedAt: new Date(), completedAt: null, error: null },
     });
 
-    // Clean synthetic demo data (optional)
-    await purgeSyntheticStations();
-
     // Download files (with cache)
     const stationsPath = await downloadWithCache('ghcnd-stations.txt');
     const tarGzPath = await downloadWithCache('ghcnd_all.tar.gz');
@@ -490,23 +509,24 @@ const runImport = async () => {
     await upsertStations(stationRows);
 
     // Purge existing aggregates for NOAA stations (keep daily observations out for performance)
-    await prisma.seasonalAggregate.deleteMany({ where: { station: { isNoaa: true } } });
-    await prisma.yearlyAggregate.deleteMany({ where: { station: { isNoaa: true } } });
+    await prisma.seasonalAggregate.deleteMany({ where: { station: { isSynthetic: false } } });
+    await prisma.yearlyAggregate.deleteMany({ where: { station: { isSynthetic: false } } });
 
     console.log('[importer] import started (aggregates only)');
     await importDlyTar(tarGzPath, allowedStationIds, stationLatitudeById);
+    await purgeSyntheticData();
     console.log('[importer] import completed');
 
     await prisma.seedMeta.upsert({
       where: { key: IMPORT_KEY },
       create: {
         key: IMPORT_KEY,
-        status: SeedImportStatus.SUCCESS,
+        status: SeedImportStatus.COMPLETED,
         endYear: END_YEAR,
         startedAt: new Date(),
         completedAt: new Date(),
       },
-      update: { status: SeedImportStatus.SUCCESS, completedAt: new Date(), error: null },
+      update: { status: SeedImportStatus.COMPLETED, completedAt: new Date(), error: null },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
