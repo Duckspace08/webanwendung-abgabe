@@ -86,96 +86,20 @@ const seed = async () => {
 
   const dailyRows: Prisma.DailyObservationCreateManyInput[] = [];
 
-  // Aggregation nach Formeln.yaml (selected_variant = mean_of_daily_extremes):
-  // - Periodenmittel = Mittel der gültigen Tagesextreme (nicht Mittel der Monatsmittel)
-  // - Gültigkeitsregel: N_valid / N_expected >= 0.90 (je Kennzahl separat)
-
-  type Hemisphere = 'N' | 'S';
-  const getHemisphereForLatitude = (lat: number): Hemisphere => (lat < 0 ? 'S' : 'N');
+  // Aggregation gemäß Vorgabe (best_effort):
+  // - Periodenmittel = arithmetisches Mittel der gültigen Tagesextreme
+  // - Fehlende/ungültige Tageswerte werden nicht mitgezählt
 
   const isLeapYear = (year: number) => new Date(Date.UTC(year, 1, 29)).getUTCMonth() === 1;
-  // month is 1-12 (meteorological month number)
-  const daysInMonth = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
   const expectedDaysForYear = (year: number) => (isLeapYear(year) ? 366 : 365);
 
-  const getSeasonMonths = (seasonYear: number, season: Prisma.Season, hemisphere: Hemisphere): { year: number; month: number }[] => {
-    if (hemisphere === 'N') {
-      switch (season) {
-        case 'WINTER':
-          return [
-            { year: seasonYear - 1, month: 12 },
-            { year: seasonYear, month: 1 },
-            { year: seasonYear, month: 2 },
-          ];
-        case 'SPRING':
-          return [
-            { year: seasonYear, month: 3 },
-            { year: seasonYear, month: 4 },
-            { year: seasonYear, month: 5 },
-          ];
-        case 'SUMMER':
-          return [
-            { year: seasonYear, month: 6 },
-            { year: seasonYear, month: 7 },
-            { year: seasonYear, month: 8 },
-          ];
-        case 'AUTUMN':
-          return [
-            { year: seasonYear, month: 9 },
-            { year: seasonYear, month: 10 },
-            { year: seasonYear, month: 11 },
-          ];
-        default:
-          return [];
-      }
-    }
-
-    // Southern hemisphere meteorological seasons:
-    // SUMMER(Y) = Dec(Y-1)+Jan..Feb(Y), AUTUMN(Y)=Mar..May(Y), WINTER(Y)=Jun..Aug(Y), SPRING(Y)=Sep..Nov(Y)
-    switch (season) {
-      case 'SUMMER':
-        return [
-          { year: seasonYear - 1, month: 12 },
-          { year: seasonYear, month: 1 },
-          { year: seasonYear, month: 2 },
-        ];
-      case 'AUTUMN':
-        return [
-          { year: seasonYear, month: 3 },
-          { year: seasonYear, month: 4 },
-          { year: seasonYear, month: 5 },
-        ];
-      case 'WINTER':
-        return [
-          { year: seasonYear, month: 6 },
-          { year: seasonYear, month: 7 },
-          { year: seasonYear, month: 8 },
-        ];
-      case 'SPRING':
-        return [
-          { year: seasonYear, month: 9 },
-          { year: seasonYear, month: 10 },
-          { year: seasonYear, month: 11 },
-        ];
-      default:
-        return [];
-    }
-  };
-
-  const expectedDaysForSeason = (seasonYear: number, season: Prisma.Season, hemisphere: Hemisphere) =>
-    getSeasonMonths(seasonYear, season, hemisphere).reduce((sum, m) => sum + daysInMonth(m.year, m.month), 0);
-
-  const MIN_PERIOD_FRACTION = 0.9;
-
   type PeriodAgg = { tminSum: number; tminDays: number; tmaxSum: number; tmaxDays: number };
-  type SeasonAgg = PeriodAgg & { stationId: string; year: number; season: Prisma.Season; hemisphere: Hemisphere };
+  type SeasonAgg = PeriodAgg & { stationId: string; year: number; season: Prisma.Season };
 
   const yearlyAgg = new Map<string, PeriodAgg>(); // stationId::year
   const seasonalAgg = new Map<string, SeasonAgg>(); // stationId::seasonYear::season
 
   for (const station of stations) {
-    const hemisphere = getHemisphereForLatitude(station.latitude);
-
     for (let year = startYear; year <= endYear; year += 1) {
       const daysInYear = expectedDaysForYear(year);
 
@@ -221,7 +145,6 @@ const seed = async () => {
             stationId: station.id,
             year: seasonYear,
             season: season as Prisma.Season,
-            hemisphere,
             tminSum: 0,
             tminDays: 0,
             tmaxSum: 0,
@@ -242,7 +165,7 @@ const seed = async () => {
     }
   }
 
-  // --- YearlyAggregate (calendar year; mean of valid daily extremes; coverage >= 90%) ---
+  // --- YearlyAggregate (Kalenderjahr; best_effort) ---
   const yearlyRows: Prisma.YearlyAggregateCreateManyInput[] = [];
 
   for (const station of stations) {
@@ -250,12 +173,8 @@ const seed = async () => {
       const acc = yearlyAgg.get(`${station.id}::${year}`);
       if (!acc) continue;
 
-      const expectedDays = expectedDaysForYear(year);
-
-      const avgTminC =
-        acc.tminDays > 0 && acc.tminDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixed2(acc.tminSum / acc.tminDays) : null;
-      const avgTmaxC =
-        acc.tmaxDays > 0 && acc.tmaxDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
+      const avgTminC = acc.tminDays > 0 ? toFixed2(acc.tminSum / acc.tminDays) : null;
+      const avgTmaxC = acc.tmaxDays > 0 ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
 
       if (avgTminC === null && avgTmaxC === null) continue;
 
@@ -271,17 +190,15 @@ const seed = async () => {
     }
   }
 
-  // --- SeasonalAggregate (mean of valid daily extremes; coverage >= 90%) ---
+  // --- SeasonalAggregate (meteorologische Jahreszeiten; best_effort) ---
   const seasonalRows: Prisma.SeasonalAggregateCreateManyInput[] = [];
 
   for (const [, acc] of seasonalAgg) {
-    const expectedDays = expectedDaysForSeason(acc.year, acc.season, acc.hemisphere);
-    if (!expectedDays) continue;
+    // Keine Saisons jenseits des konfigurierten Seed-Horizonts (z. B. "Winter 2027" nur wegen Dezember 2026).
+    if (acc.year > endYear) continue;
 
-    const avgTminC =
-      acc.tminDays > 0 && acc.tminDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixed2(acc.tminSum / acc.tminDays) : null;
-    const avgTmaxC =
-      acc.tmaxDays > 0 && acc.tmaxDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
+    const avgTminC = acc.tminDays > 0 ? toFixed2(acc.tminSum / acc.tminDays) : null;
+    const avgTmaxC = acc.tmaxDays > 0 ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
 
     if (avgTminC === null && avgTmaxC === null) continue;
 

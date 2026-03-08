@@ -1,7 +1,7 @@
 {
   "name": "webanwendung-v1",
   "private": true,
-  "packageManager": "pnpm@8.15.4",
+  "packageManager": "pnpm@10.31.0+sha512.e3927388bfaa8078ceb79b748ffc1e8274e84d75163e67bc22e06c0d3aed43dd153151cbf11d7f8301ff4acb98c68bdc5cadf6989532801ffafe3b3e4a63c268",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -11,14 +11,11 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "format": "pnpm -r format",
-
     "ensure:env": "node tools/scripts/ensure-env.mjs",
     "prisma:generate": "prisma generate",
     "postinstall": "pnpm run ensure:env && pnpm run prisma:generate",
-
     "test": "pnpm -r test --",
     "test:coverage": "pnpm -r test -- --coverage",
-
     "e2e": "playwright test",
     "perf": "node tools/perf/perf.mjs"
   },

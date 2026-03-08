@@ -234,104 +234,9 @@ const importDlyTar = async (
   let currentStation: string | null = null;
   let monthly: Map<string, Accumulator> = new Map();
 
-  type Hemisphere = 'N' | 'S';
-
-  const getHemisphereForLatitude = (lat: number | undefined): Hemisphere => (typeof lat === 'number' && lat < 0 ? 'S' : 'N');
-
-  const isLeapYear = (year: number) => new Date(Date.UTC(year, 1, 29)).getUTCMonth() === 1;
-  // month is 1-12 (meteorological month number)
-  const daysInMonth = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const expectedDaysForYear = (year: number) => (isLeapYear(year) ? 366 : 365);
-
-  // Expected day counts per season (needed for coverage check per Formeln.yaml)
-  const seasonMonthsCache = new Map<string, { year: number; month: number }[]>();
-
-  const getSeasonMonths = (seasonYear: number, season: PrismaSeason, hemisphere: Hemisphere): { year: number; month: number }[] => {
-    const cacheKey = `${hemisphere}:${seasonYear}:${season}`;
-    const cached = seasonMonthsCache.get(cacheKey);
-    if (cached) return cached;
-
-    let months: { year: number; month: number }[];
-    if (hemisphere === 'N') {
-      // Northern hemisphere (meteorological):
-      // WINTER(Y) = Dec(Y-1) + Jan..Feb(Y)
-      switch (season) {
-        case 'WINTER':
-          months = [
-            { year: seasonYear - 1, month: 12 },
-            { year: seasonYear, month: 1 },
-            { year: seasonYear, month: 2 },
-          ];
-          break;
-        case 'SPRING':
-          months = [
-            { year: seasonYear, month: 3 },
-            { year: seasonYear, month: 4 },
-            { year: seasonYear, month: 5 },
-          ];
-          break;
-        case 'SUMMER':
-          months = [
-            { year: seasonYear, month: 6 },
-            { year: seasonYear, month: 7 },
-            { year: seasonYear, month: 8 },
-          ];
-          break;
-        case 'AUTUMN':
-          months = [
-            { year: seasonYear, month: 9 },
-            { year: seasonYear, month: 10 },
-            { year: seasonYear, month: 11 },
-          ];
-          break;
-        default:
-          months = [];
-      }
-    } else {
-      // Southern hemisphere (meteorological):
-      // SUMMER(Y) = Dec(Y-1) + Jan..Feb(Y), AUTUMN(Y) = Mar..May(Y), WINTER(Y) = Jun..Aug(Y), SPRING(Y) = Sep..Nov(Y)
-      switch (season) {
-        case 'SUMMER':
-          months = [
-            { year: seasonYear - 1, month: 12 },
-            { year: seasonYear, month: 1 },
-            { year: seasonYear, month: 2 },
-          ];
-          break;
-        case 'AUTUMN':
-          months = [
-            { year: seasonYear, month: 3 },
-            { year: seasonYear, month: 4 },
-            { year: seasonYear, month: 5 },
-          ];
-          break;
-        case 'WINTER':
-          months = [
-            { year: seasonYear, month: 6 },
-            { year: seasonYear, month: 7 },
-            { year: seasonYear, month: 8 },
-          ];
-          break;
-        case 'SPRING':
-          months = [
-            { year: seasonYear, month: 9 },
-            { year: seasonYear, month: 10 },
-            { year: seasonYear, month: 11 },
-          ];
-          break;
-        default:
-          months = [];
-      }
-    }
-
-    seasonMonthsCache.set(cacheKey, months);
-    return months;
-  };
-
-  const expectedDaysForSeason = (seasonYear: number, season: PrismaSeason, hemisphere: Hemisphere) =>
-    getSeasonMonths(seasonYear, season, hemisphere).reduce((sum, m) => sum + daysInMonth(m.year, m.month), 0);
-
-  const MIN_PERIOD_FRACTION = 0.9;
+  // "best_effort" (gemäß Vorgabe):
+  // Periodenmittelwerte werden als arithmetisches Mittel aller verfügbaren und gültigen Tageswerte berechnet.
+  // Fehlende oder ungültige Tageswerte werden nicht mitgezählt.
 
   type PeriodAgg = { tminSum: number; tminDays: number; tmaxSum: number; tmaxDays: number };
 
@@ -340,7 +245,6 @@ const importDlyTar = async (
     if (!allowedStationIds.has(currentStation)) return;
 
     const latitude = stationLatitudeById.get(currentStation);
-    const hemisphere = getHemisphereForLatitude(latitude);
 
     const yearlyAgg = new Map<number, PeriodAgg>();
     const seasonalAgg = new Map<string, ({ year: number; season: PrismaSeason } & PeriodAgg)>(); // seasonYear:season
@@ -351,9 +255,8 @@ const importDlyTar = async (
       const month = Number(monthStr);
       if (!Number.isFinite(year) || !Number.isFinite(month)) continue;
 
-      // --- Yearly aggregation (Formeln.yaml selected_variant = mean_of_daily_extremes):
-      // TMIN(YR(Y)) = (1/N) * Σ_{d∈YR(Y), valid} TMIN_DAY(d)
-      // Since we only have daily values, this is total sum / total valid days.
+      // --- Jahresaggregation (best_effort):
+      // arithmetisches Mittel aller verfügbaren und gültigen Tageswerte im Kalenderjahr
       const y =
         yearlyAgg.get(year) ??
         ({
@@ -373,7 +276,7 @@ const importDlyTar = async (
       }
       yearlyAgg.set(year, y);
 
-      // --- Seasonal aggregation (Formeln.yaml periods: WI(Y)=Dec(Y-1)+Jan..Feb(Y)):
+      // --- Saisonaggregation (meteorologische Jahreszeiten; Winter über Jahreswechsel):
       const { season, seasonYear } = getSeasonForMonth(year, month, typeof latitude === 'number' ? { latitude } : undefined);
       const seasonKey = `${seasonYear}:${season}`;
 
@@ -401,14 +304,10 @@ const importDlyTar = async (
     }
 
     for (const [year, agg] of yearlyAgg) {
-      const expectedDays = expectedDaysForYear(year);
+      const avgTminC = agg.tminDays > 0 ? toFixedNumber(agg.tminSum / agg.tminDays) : null;
+      const avgTmaxC = agg.tmaxDays > 0 ? toFixedNumber(agg.tmaxSum / agg.tmaxDays) : null;
 
-      const avgTminC =
-        agg.tminDays > 0 && agg.tminDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixedNumber(agg.tminSum / agg.tminDays) : null;
-      const avgTmaxC =
-        agg.tmaxDays > 0 && agg.tmaxDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixedNumber(agg.tmaxSum / agg.tmaxDays) : null;
-
-      // Skip invalid periods per coverage rule
+      // Periode ohne gültige Werte überspringen
       if (avgTminC === null && avgTmaxC === null) continue;
 
       yearlyRows.push({
@@ -422,15 +321,13 @@ const importDlyTar = async (
     }
 
     for (const [, agg] of seasonalAgg) {
-      const expectedDays = expectedDaysForSeason(agg.year, agg.season, hemisphere);
-      if (!expectedDays) continue;
+      // Keine Saisons jenseits des konfigurierten Datenhorizonts (z. B. "Winter 2026" nur wegen Dezember 2025).
+      if (agg.year > END_YEAR) continue;
 
-      const avgTminC =
-        agg.tminDays > 0 && agg.tminDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixedNumber(agg.tminSum / agg.tminDays) : null;
-      const avgTmaxC =
-        agg.tmaxDays > 0 && agg.tmaxDays / expectedDays >= MIN_PERIOD_FRACTION ? toFixedNumber(agg.tmaxSum / agg.tmaxDays) : null;
+      const avgTminC = agg.tminDays > 0 ? toFixedNumber(agg.tminSum / agg.tminDays) : null;
+      const avgTmaxC = agg.tmaxDays > 0 ? toFixedNumber(agg.tmaxSum / agg.tmaxDays) : null;
 
-      // Skip invalid periods per coverage rule
+      // Periode ohne gültige Werte überspringen
       if (avgTminC === null && avgTmaxC === null) continue;
 
       seasonalRows.push({
