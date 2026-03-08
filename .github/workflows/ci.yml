@@ -28,7 +28,6 @@ jobs:
           - 5432:5432
 
     env:
-      # Job läuft auf Host (VM) -> Service via localhost + published port erreichbar
       DATABASE_URL: postgresql://ghcn:ghcn@localhost:5432/ghcn?schema=public
 
     steps:
@@ -88,17 +87,45 @@ jobs:
         run: pnpm test
 
       - name: Test Coverage
-        run: pnpm test:coverage
+        run: |
+          pnpm --filter @webanwendung/shared test:coverage
+          pnpm --filter @webanwendung/api test:coverage
+          pnpm --filter @webanwendung/web test:coverage
+
+      - name: Stage coverage report artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .artifacts/coverage-report
+          found=0
+
+          for dir in \
+            packages/shared/coverage \
+            apps/api/coverage \
+            apps/web/coverage
+          do
+            if [ -d "$dir" ]; then
+              mkdir -p ".artifacts/coverage-report/$(dirname "$dir")"
+              cp -R "$dir" ".artifacts/coverage-report/$dir"
+              found=1
+            fi
+          done
+
+          echo "Collected coverage files:"
+          find .artifacts/coverage-report -type f | sort || true
+
+          if [ "$found" -eq 0 ]; then
+            echo "No coverage reports were generated."
+            exit 1
+          fi
 
       - name: Upload coverage report (HTML + lcov)
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           if-no-files-found: error
-          path: |
-            apps/api/coverage
-            apps/web/coverage
-            packages/shared/coverage
+          path: .artifacts/coverage-report
 
       - name: Build
         run: pnpm build
