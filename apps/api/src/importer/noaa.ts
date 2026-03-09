@@ -115,7 +115,8 @@ const loadStations = async (stationsPath: string) => {
 
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
 
-    // Keep: all stations, but later we only import data for stations within END_YEAR and with records
+    // Alle Stationen zunächst laden. Stationen ohne tatsächlich importierte Jahresaggregate
+    // werden nach dem Import wieder entfernt.
     allowedStationIds.add(id);
     stationLatitudeById.set(id, latitude);
 
@@ -125,7 +126,9 @@ const loadStations = async (stationsPath: string) => {
       latitude,
       longitude,
       elevation: Number.isFinite(elevation as number) ? (elevation as number) : null,
-      firstYear: 1763,
+      // Temporäre Placeholder-Werte nur für den Insert-Pfad.
+      // Die echten Werte werden nach dem Aggregationsimport aus YearlyAggregate abgeleitet.
+      firstYear: END_YEAR,
       lastYear: END_YEAR,
     });
   }
@@ -156,8 +159,6 @@ const upsertStations = async (stationRows: StationRow[]) => {
         "latitude" = EXCLUDED."latitude",
         "longitude" = EXCLUDED."longitude",
         "elevation" = EXCLUDED."elevation",
-        "firstYear" = EXCLUDED."firstYear",
-        "lastYear" = EXCLUDED."lastYear",
         "geom" = EXCLUDED."geom",
         "isSynthetic" = FALSE;
     `);
@@ -213,6 +214,72 @@ const flushAggregates = async (
     await prisma.seasonalAggregate.createMany({ data: seasonalRows, skipDuplicates: true });
     seasonalRows.length = 0;
   }
+};
+
+const countInvalidNoaaStationYearRanges = async () => {
+  const result = await prisma.$queryRaw<Array<{ invalid_count: bigint | number }>>(Prisma.sql`
+    WITH actual_ranges AS (
+      SELECT
+        "stationId",
+        MIN(year) AS "firstYear",
+        MAX(year) AS "lastYear"
+      FROM "YearlyAggregate"
+      GROUP BY "stationId"
+    )
+    SELECT COUNT(*)::bigint AS invalid_count
+    FROM "Station" s
+    LEFT JOIN actual_ranges a
+      ON a."stationId" = s.id
+    WHERE s."isSynthetic" = FALSE
+      AND (
+        a."stationId" IS NULL
+        OR s."firstYear" IS DISTINCT FROM a."firstYear"
+        OR s."lastYear" IS DISTINCT FROM a."lastYear"
+      );
+  `);
+
+  const rawValue = result[0]?.invalid_count ?? 0;
+  return typeof rawValue === 'bigint' ? Number(rawValue) : Number(rawValue);
+};
+
+const reconcileNoaaStations = async () => {
+  await prisma.$executeRaw(Prisma.sql`
+    UPDATE "Station" AS s
+    SET
+      "firstYear" = actual_ranges."firstYear",
+      "lastYear" = actual_ranges."lastYear"
+    FROM (
+      SELECT
+        "stationId",
+        MIN(year) AS "firstYear",
+        MAX(year) AS "lastYear"
+      FROM "YearlyAggregate"
+      GROUP BY "stationId"
+    ) AS actual_ranges
+    WHERE s.id = actual_ranges."stationId"
+      AND s."isSynthetic" = FALSE;
+  `);
+
+  const deletedWithoutAggregates = await prisma.$executeRaw(Prisma.sql`
+    DELETE FROM "Station" AS s
+    WHERE s."isSynthetic" = FALSE
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "YearlyAggregate" y
+        WHERE y."stationId" = s.id
+      );
+  `);
+
+  if (deletedWithoutAggregates > 0) {
+    console.log(`[importer] removed NOAA stations without aggregates: ${deletedWithoutAggregates}`);
+  }
+
+  const invalidCount = await countInvalidNoaaStationYearRanges();
+  if (invalidCount > 0) {
+    throw new Error(`NOAA station year range reconciliation failed for ${invalidCount} station(s)`);
+  }
+
+  console.log('[importer] NOAA station year ranges reconciled');
 };
 
 const importDlyTar = async (
@@ -380,7 +447,16 @@ const runImport = async () => {
     const existingMeta = await prisma.seedMeta.findUnique({ where: { key: IMPORT_KEY } });
 
     if (existingMeta?.status === SeedImportStatus.COMPLETED && existingMeta.endYear === END_YEAR && !FORCE_IMPORT) {
-      console.log('[importer] already imported; skip');
+      const invalidRangeCount = await countInvalidNoaaStationYearRanges();
+
+      if (invalidRangeCount === 0) {
+        console.log('[importer] already imported; skip');
+        await purgeSyntheticData();
+        return;
+      }
+
+      console.log(`[importer] detected ${invalidRangeCount} invalid NOAA station year range(s); repairing from aggregates`);
+      await reconcileNoaaStations();
       await purgeSyntheticData();
       return;
     }
@@ -411,6 +487,7 @@ const runImport = async () => {
 
     console.log('[importer] import started (aggregates only)');
     await importDlyTar(tarGzPath, allowedStationIds, stationLatitudeById);
+    await reconcileNoaaStations();
     await purgeSyntheticData();
     console.log('[importer] import completed');
 
