@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   # Optional: Restore an offline/pre-aggregated demo dataset into the DB (fast startup).
-  # - Expects a dump at: ./seed/offline-demo-db.sql.gz (repo is mounted read-only to /repo)
+  # - Expects a PUBLIC-schema dump at: ./seed/offline-demo-db.sql.gz (repo is mounted read-only to /repo)
   # - Skips automatically if DB already contains data (unless OFFLINE_SEED_FORCE=1).
   seed_restore:
     image: postgis/postgis:16-3.4
@@ -52,7 +52,6 @@ services:
             exit 0
           fi
 
-          # Check whether the DB already contains station data
           tableExists=$$(psql -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='Station'" 2>/dev/null || echo 0)
           if [ "$${OFFLINE_SEED_FORCE:-0}" != "1" ] && [ "$${tableExists}" != "0" ]; then
             cnt=$$(psql -tAc 'SELECT COUNT(*) FROM public."Station"' 2>/dev/null || echo 0)
@@ -63,12 +62,14 @@ services:
           fi
 
           if [ "$${OFFLINE_SEED_FORCE:-0}" = "1" ]; then
-            echo "OFFLINE_SEED_FORCE=1 – dropping public schema before restore"
-            psql -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO postgres; CREATE EXTENSION IF NOT EXISTS postgis;'
+            echo "OFFLINE_SEED_FORCE=1 – forcing offline seed restore"
           fi
 
+          echo "Preparing public schema for offline seed restore"
+          psql -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO postgres; CREATE EXTENSION IF NOT EXISTS postgis;'
+
           echo "Restoring offline seed from $${f} ..."
-          gzip -dc "$${f}" | psql -v ON_ERROR_STOP=1
+          gzip -dc "$${f}" | sed '/^CREATE SCHEMA public;/d' | psql -v ON_ERROR_STOP=1
           echo "Offline seed restore completed"
     restart: "no"
 
@@ -93,7 +94,8 @@ services:
       [
         "sh",
         "-c",
-        "i=0; until pnpm prisma migrate deploy; do i=$$((i+1)); echo \"DB not reachable yet (attempt $$i/30)\"; if [ $$i -ge 30 ]; then exit 1; fi; sleep 2; done; node apps/api/dist/importer/noaa.js",
+        "i=0; until pnpm prisma migrate deploy; do i=$$((i+1)); echo \"DB not reachable yet (attempt $$i/30)\"; if [ $$i -ge 30 ]; then exit 1; fi; sleep 2; done; \
+         a=0; until node apps/api/dist/importer/noaa.js; do a=$$((a+1)); echo \"Importer failed (attempt $$a/3) – retrying in 10s\"; if [ $$a -ge 3 ]; then exit 1; fi; sleep 10; done",
       ]
     restart: "no"
 

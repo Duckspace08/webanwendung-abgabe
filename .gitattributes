@@ -1,3 +1,4 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+seed/offline-demo-db.sql.gz filter=lfs diff=lfs merge=lfs -text
