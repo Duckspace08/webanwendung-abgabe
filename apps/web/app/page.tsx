@@ -8,7 +8,7 @@ export default function HomePage() {
           Offline-Explorer für GHCN Daily Temperaturdaten
         </h2>
         <p className="mt-4 max-w-2xl text-slate-300">
-          Diese Demo nutzt synthetische NOAA/GHCN-Daten, die lokal in PostgreSQL/PostGIS
+          Diese Offline-Demo nutzt NOAA/GHCN-Daten, die lokal in PostgreSQL/PostGIS
           voraggregiert wurden. So lassen sich Stationen schnell finden und Jahres- sowie
           Saisonmittelwerte unter 3 Sekunden darstellen.
         </p>

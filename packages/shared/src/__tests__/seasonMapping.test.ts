@@ -7,11 +7,13 @@ describe('getSeasonForMonth', () => {
     expect(getSeasonForMonth(2024, 7)).toEqual({ season: 'SUMMER', seasonYear: 2024 });
     expect(getSeasonForMonth(2024, 10)).toEqual({ season: 'AUTUMN', seasonYear: 2024 });
 
-    // Formeln.yaml: WI(Y) = Dec(Y-1) + Jan..Feb(Y)
-    // => December belongs to the next seasonYear, Jan/Feb to the same seasonYear.
-    expect(getSeasonForMonth(2024, 1)).toEqual({ season: 'WINTER', seasonYear: 2024 });
-    expect(getSeasonForMonth(2024, 2)).toEqual({ season: 'WINTER', seasonYear: 2024 });
-    expect(getSeasonForMonth(2024, 12)).toEqual({ season: 'WINTER', seasonYear: 2025 });
+    // Dozentenvorgabe:
+    // Winter x = Dezember x + Januar x+1 + Februar x+1
+    // => January/February belong to the previous winter year,
+    //    December belongs to the current winter year.
+    expect(getSeasonForMonth(2024, 1)).toEqual({ season: 'WINTER', seasonYear: 2023 });
+    expect(getSeasonForMonth(2024, 2)).toEqual({ season: 'WINTER', seasonYear: 2023 });
+    expect(getSeasonForMonth(2024, 12)).toEqual({ season: 'WINTER', seasonYear: 2024 });
   });
 
   it('supports southern hemisphere inversion via latitude', () => {
@@ -23,8 +25,9 @@ describe('getSeasonForMonth', () => {
     // In the south, April is AUTUMN.
     expect(getSeasonForMonth(2025, 4, s)).toEqual({ season: 'AUTUMN', seasonYear: 2025 });
 
-    // Formeln.yaml-aligned SeasonYear convention: SUMMER(Y) = Dec(Y-1) + Jan..Feb(Y)
-    expect(getSeasonForMonth(2026, 1, s)).toEqual({ season: 'SUMMER', seasonYear: 2026 });
-    expect(getSeasonForMonth(2025, 12, s)).toEqual({ season: 'SUMMER', seasonYear: 2026 });
+    // Analogous convention in the southern hemisphere:
+    // Summer x = Dezember x + Januar x+1 + Februar x+1
+    expect(getSeasonForMonth(2026, 1, s)).toEqual({ season: 'SUMMER', seasonYear: 2025 });
+    expect(getSeasonForMonth(2025, 12, s)).toEqual({ season: 'SUMMER', seasonYear: 2025 });
   });
 });

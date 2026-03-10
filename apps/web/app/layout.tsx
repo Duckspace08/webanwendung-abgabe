@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </header>
             <main className="flex-1">{children}</main>
             <footer className="mt-12 border-t border-slate-800 pt-6 text-sm text-slate-400">
-              Offline-Demo mit synthetischen NOAA/GHCN Daily Daten.
+              Offline-Demo mit aggregierten NOAA/GHCN Daily Daten.
             </footer>
           </div>
         </Providers>
