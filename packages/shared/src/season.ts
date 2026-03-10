@@ -17,20 +17,20 @@ export type GetSeasonForMonthOptions = {
 /**
  * Meteorological seasons (3-month blocks).
  *
- * SeasonYear convention (aligned to Formeln.yaml / meteorological period definitions):
+ * SeasonYear convention (meteorological period definitions):
  * - YR(Y) = Jan..Dec(Y)
- * - WI(Y) = Dec(Y-1) + Jan..Feb(Y)
+ * - WI(Y) = Dec(Y) + Jan..Feb(Y+1)
  *
  * Therefore (Northern hemisphere):
- * - Dec belongs to seasonYear = year + 1
- * - Jan/Feb belongs to seasonYear = year
+ * - Dec belongs to seasonYear = year
+ * - Jan/Feb belongs to seasonYear = year - 1
  * - all other months belong to seasonYear = year
  *
  * For the Southern hemisphere, seasons are inverted by 6 months:
  * - N: WINTER ↔ S: SUMMER, N: SPRING ↔ S: AUTUMN.
  *
- * The SeasonYear convention remains "the year of Jan/Feb" of the cross-year season.
- * That means in the south: SUMMER(Y) = Dec(Y-1) + Jan..Feb(Y).
+ * The SeasonYear convention remains "the year of the December" of the cross-year season.
+ * That means in the south: SUMMER(Y) = Dec(Y) + Jan..Feb(Y+1).
  */
 export const getSeasonForMonth = (
   year: number,
@@ -51,9 +51,9 @@ export const getSeasonForMonth = (
   else if ([9, 10, 11].includes(month)) season = 'AUTUMN';
   else season = 'WINTER';
 
-  // Formeln.yaml: WI(Y) = Dec(Y-1) + Jan..Feb(Y)
-  // => December belongs to next seasonYear.
-  const seasonYear = season === 'WINTER' && month === 12 ? year + 1 : year;
+  // WI(Y) = Dec(Y) + Jan..Feb(Y+1)
+  // => Jan/Feb belong to previous seasonYear.
+  const seasonYear = season === 'WINTER' && (month === 1 || month === 2) ? year - 1 : year;
 
   if (hemisphere === 'N') {
     return { season, seasonYear };

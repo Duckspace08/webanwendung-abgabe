@@ -37,7 +37,7 @@ const stations = [
   { id: 'CA-001', name: 'Toronto Pearson', latitude: 43.68, longitude: -79.63, elevation: 173 },
 ];
 
-// Wichtig (Formeln.yaml): WI(2026) = Dez 2025 + Jan/Feb 2026. Daher mindestens bis 2026 seeden.
+// Wichtig (meteorologische Konvention): WI(Y) = Dez(Y) + Jan/Feb(Y+1) (Saison wird nach Dezember-Jahr benannt).
 
 const startYear = 2015;
 const endYear = 2026;
@@ -86,31 +86,54 @@ const seed = async () => {
 
   const dailyRows: Prisma.DailyObservationCreateManyInput[] = [];
 
-  // Aggregation gemäß Vorgabe (best_effort):
-  // - Periodenmittel = arithmetisches Mittel der gültigen Tagesextreme
-  // - Fehlende/ungültige Tageswerte werden nicht mitgezählt
+// Aggregation gemäß Vorgabe / Dozent (best_effort):
+  // 1) Monatsmittelwerte: arithmetisches Mittel der gültigen Tagesextreme (TMIN/TMAX getrennt)
+  // 2) Jahres-/Saisonmittel: arithmetisches Mittel der *gerundeten* Monatsmittel / Anzahl vorhandener Monate
+  // Fehlende/ungültige Tageswerte werden nicht mitgezählt.
 
   const isLeapYear = (year: number) => new Date(Date.UTC(year, 1, 29)).getUTCMonth() === 1;
   const expectedDaysForYear = (year: number) => (isLeapYear(year) ? 366 : 365);
 
-  type PeriodAgg = { tminSum: number; tminDays: number; tmaxSum: number; tmaxDays: number };
+  type MonthAgg = { tminSum: number; tminDays: number; tmaxSum: number; tmaxDays: number };
+
+  type PeriodAgg = {
+    tminMonthSum: number;
+    tminMonths: number;
+    tmaxMonthSum: number;
+    tmaxMonths: number;
+    tminDays: number;
+    tmaxDays: number;
+  };
+
   type SeasonAgg = PeriodAgg & { stationId: string; year: number; season: Prisma.Season };
 
-  const yearlyAgg = new Map<string, PeriodAgg>(); // stationId::year
-  const seasonalAgg = new Map<string, SeasonAgg>(); // stationId::seasonYear::season
+  const stationLatitude = new Map<string, number>(stations.map((s) => [s.id, s.latitude]));
 
+  // Tageswerte werden zunächst zu Monatsakkumulatoren verdichtet (stationId::year::month).
+  // Daraus werden anschließend gerundete Monatsmittel gebildet und zu Jahres-/Saisonmitteln aggregiert.
+  const monthlyAgg = new Map<string, MonthAgg>();
+
+  // Generate daily observations
   for (const station of stations) {
     for (let year = startYear; year <= endYear; year += 1) {
       const daysInYear = expectedDaysForYear(year);
-
-      for (let day = 0; day < daysInYear; day += 1) {
-        const date = new Date(Date.UTC(year, 0, 1 + day));
-        const dayOfYear = day + 1;
+      for (let dayOfYear = 1; dayOfYear <= daysInYear; dayOfYear += 1) {
+        // Convert dayOfYear to date (UTC)
+        const date = new Date(Date.UTC(year, 0, 1));
+        date.setUTCDate(dayOfYear);
 
         const { tminC, tmaxC } = generateTemperatureForDay(station.latitude, dayOfYear);
 
-        const tmin = Math.random() < 0.03 ? null : Number(tminC.toFixed(1));
-        const tmax = Math.random() < 0.03 ? null : Number(tmaxC.toFixed(1));
+        // Add noise
+        const noiseMin = (Math.random() - 0.5) * 4;
+        const noiseMax = (Math.random() - 0.5) * 4;
+
+        // Occasionally missing values (simulate gaps)
+        const missMin = Math.random() < 0.02;
+        const missMax = Math.random() < 0.02;
+
+        const tmin = missMin ? null : Number((tminC + noiseMin).toFixed(1));
+        const tmax = missMax ? null : Number((tmaxC + noiseMax).toFixed(1));
 
         dailyRows.push({
           id: randomUUID(),
@@ -120,49 +143,98 @@ const seed = async () => {
           tmaxC: tmax,
         });
 
-        // --- Yearly accumulator (calendar year Jan..Dec)
-        const yKey = `${station.id}::${year}`;
-        const y = yearlyAgg.get(yKey) ?? { tminSum: 0, tminDays: 0, tmaxSum: 0, tmaxDays: 0 };
-
-        if (typeof tmin === 'number') {
-          y.tminSum += tmin;
-          y.tminDays += 1;
-        }
-        if (typeof tmax === 'number') {
-          y.tmaxSum += tmax;
-          y.tmaxDays += 1;
-        }
-
-        yearlyAgg.set(yKey, y);
-
-        // --- Seasonal accumulator (seasonYear per getSeasonForMonth, aligned to Formeln.yaml WI(Y)=Dec(Y-1)+Jan..Feb(Y))
+        // --- Monatsakkumulator (Basis für Monatsmittel; stationId::year::month)
         const month = date.getUTCMonth() + 1;
-        const { season, seasonYear } = getSeasonForMonth(year, month, { latitude: station.latitude });
-        const sKey = `${station.id}::${seasonYear}::${season}`;
-        const s =
-          seasonalAgg.get(sKey) ??
-          ({
-            stationId: station.id,
-            year: seasonYear,
-            season: season as Prisma.Season,
-            tminSum: 0,
-            tminDays: 0,
-            tmaxSum: 0,
-            tmaxDays: 0,
-          } satisfies SeasonAgg);
+        const mKey = `${station.id}::${year}::${month}`;
+        const m = monthlyAgg.get(mKey) ?? { tminSum: 0, tminDays: 0, tmaxSum: 0, tmaxDays: 0 };
 
         if (typeof tmin === 'number') {
-          s.tminSum += tmin;
-          s.tminDays += 1;
+          m.tminSum += tmin;
+          m.tminDays += 1;
         }
         if (typeof tmax === 'number') {
-          s.tmaxSum += tmax;
-          s.tmaxDays += 1;
+          m.tmaxSum += tmax;
+          m.tmaxDays += 1;
         }
 
-        seasonalAgg.set(sKey, s);
+        monthlyAgg.set(mKey, m);
       }
     }
+  }
+
+
+  // --- Aggregation aus (gerundeten) Monatsmitteln ---
+  const yearlyAgg = new Map<string, PeriodAgg>(); // stationId::year
+  const seasonalAgg = new Map<string, SeasonAgg>(); // stationId::seasonYear::season
+
+  for (const [key, acc] of monthlyAgg) {
+    const [stationId, yearStr, monthStr] = key.split('::');
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+    if (!stationId || !Number.isFinite(year) || !Number.isFinite(month)) continue;
+
+    const tminMonthMean = acc.tminDays > 0 ? toFixed2(acc.tminSum / acc.tminDays) : null;
+    const tmaxMonthMean = acc.tmaxDays > 0 ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
+
+    // Yearly (Kalenderjahr)
+    const yKey = `${stationId}::${year}`;
+    const y =
+      yearlyAgg.get(yKey) ??
+      ({
+        tminMonthSum: 0,
+        tminMonths: 0,
+        tmaxMonthSum: 0,
+        tmaxMonths: 0,
+        tminDays: 0,
+        tmaxDays: 0,
+      } satisfies PeriodAgg);
+
+    if (tminMonthMean !== null) {
+      y.tminMonthSum += tminMonthMean;
+      y.tminMonths += 1;
+    }
+    if (tmaxMonthMean !== null) {
+      y.tmaxMonthSum += tmaxMonthMean;
+      y.tmaxMonths += 1;
+    }
+
+    y.tminDays += acc.tminDays;
+    y.tmaxDays += acc.tmaxDays;
+
+    yearlyAgg.set(yKey, y);
+
+    // Seasonal (meteorologische Jahreszeiten, inkl. Winter über Jahreswechsel)
+    const latitude = stationLatitude.get(stationId);
+    const { season, seasonYear } = getSeasonForMonth(year, month, typeof latitude === 'number' ? { latitude } : undefined);
+
+    const sKey = `${stationId}::${seasonYear}::${season}`;
+    const s =
+      seasonalAgg.get(sKey) ??
+      ({
+        stationId,
+        year: seasonYear,
+        season: season as Prisma.Season,
+        tminMonthSum: 0,
+        tminMonths: 0,
+        tmaxMonthSum: 0,
+        tmaxMonths: 0,
+        tminDays: 0,
+        tmaxDays: 0,
+      } satisfies SeasonAgg);
+
+    if (tminMonthMean !== null) {
+      s.tminMonthSum += tminMonthMean;
+      s.tminMonths += 1;
+    }
+    if (tmaxMonthMean !== null) {
+      s.tmaxMonthSum += tmaxMonthMean;
+      s.tmaxMonths += 1;
+    }
+
+    s.tminDays += acc.tminDays;
+    s.tmaxDays += acc.tmaxDays;
+
+    seasonalAgg.set(sKey, s);
   }
 
   // --- YearlyAggregate (Kalenderjahr; best_effort) ---
@@ -173,8 +245,8 @@ const seed = async () => {
       const acc = yearlyAgg.get(`${station.id}::${year}`);
       if (!acc) continue;
 
-      const avgTminC = acc.tminDays > 0 ? toFixed2(acc.tminSum / acc.tminDays) : null;
-      const avgTmaxC = acc.tmaxDays > 0 ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
+      const avgTminC = acc.tminMonths > 0 ? toFixed2(acc.tminMonthSum / acc.tminMonths) : null;
+      const avgTmaxC = acc.tmaxMonths > 0 ? toFixed2(acc.tmaxMonthSum / acc.tmaxMonths) : null;
 
       if (avgTminC === null && avgTmaxC === null) continue;
 
@@ -194,11 +266,11 @@ const seed = async () => {
   const seasonalRows: Prisma.SeasonalAggregateCreateManyInput[] = [];
 
   for (const [, acc] of seasonalAgg) {
-    // Keine Saisons jenseits des konfigurierten Seed-Horizonts (z. B. "Winter 2027" nur wegen Dezember 2026).
+    // Keine Saisons jenseits des konfigurierten Seed-Horizonts.
     if (acc.year > endYear) continue;
 
-    const avgTminC = acc.tminDays > 0 ? toFixed2(acc.tminSum / acc.tminDays) : null;
-    const avgTmaxC = acc.tmaxDays > 0 ? toFixed2(acc.tmaxSum / acc.tmaxDays) : null;
+    const avgTminC = acc.tminMonths > 0 ? toFixed2(acc.tminMonthSum / acc.tminMonths) : null;
+    const avgTmaxC = acc.tmaxMonths > 0 ? toFixed2(acc.tmaxMonthSum / acc.tmaxMonths) : null;
 
     if (avgTminC === null && avgTmaxC === null) continue;
 

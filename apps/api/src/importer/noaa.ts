@@ -11,7 +11,12 @@ const prisma = new PrismaClient();
 
 const IMPORT_KEY = 'noaa_ghcn_daily';
 const LOCK_KEY = 8152025;
-const FLUSH_SIZE = 50_000;
+
+// WICHTIG: Postgres hat ein Limit von max. 32767 Bind-Variablen pro Prepared Statement.
+// -> Upserts/Inserts müssen in Batches erfolgen.
+const STATION_UPSERT_CHUNK = 3_000; // ~ 3k * 9 binds = 27k < 32767
+const CREATE_MANY_CHUNK = 3_000; // safe für Yearly (6 binds) und Seasonal (7 binds)
+const FLUSH_SIZE = 30_000; // Speicher/Performance-Tradeoff; tatsächliches Schreiben erfolgt gechunked
 
 const END_YEAR = Number(process.env.NOAA_END_YEAR ?? 2025);
 const BASE_URL = process.env.NOAA_BASE_URL ?? 'https://www.ncei.noaa.gov/pub/data/ghcn/daily/';
@@ -41,8 +46,7 @@ const toNodeReadable = (webStream: unknown): NodeJS.ReadableStream => {
     throw new TypeError('Expected a web ReadableStream but got null/undefined');
   }
 
-  // TS/DOM typings can differ (ReadableStream<Uint8Array<ArrayBufferLike>> vs ReadableStream<Uint8Array>).
-  // Runtime is compatible; normalize via cast without using `any`.
+  // TS/DOM typings can differ; runtime is compatible
   return Readable.fromWeb(webStream as unknown as ReadableStream<Uint8Array>) as unknown as NodeJS.ReadableStream;
 };
 
@@ -78,123 +82,111 @@ const purgeSyntheticData = async () => {
 
   console.log(`[importer] purging synthetic dataset (${syntheticCount} stations)`);
 
-  await prisma.$transaction(async (tx) => {
-    const ids = await tx.station.findMany({ where: { isSynthetic: true }, select: { id: true } });
-    const stationIds = ids.map((s) => s.id);
-    if (stationIds.length === 0) return;
-
-    await tx.seasonalAggregate.deleteMany({ where: { stationId: { in: stationIds } } });
-    await tx.yearlyAggregate.deleteMany({ where: { stationId: { in: stationIds } } });
-    await tx.dailyObservation.deleteMany({ where: { stationId: { in: stationIds } } });
-    await tx.station.deleteMany({ where: { id: { in: stationIds } } });
-  });
+  await prisma.seasonalAggregate.deleteMany({ where: { station: { isSynthetic: true } } });
+  await prisma.yearlyAggregate.deleteMany({ where: { station: { isSynthetic: true } } });
+  await prisma.dailyObservation.deleteMany({ where: { station: { isSynthetic: true } } });
+  await prisma.station.deleteMany({ where: { isSynthetic: true } });
 
   console.log('[importer] synthetic dataset purged');
 };
 
 const loadStations = async (stationsPath: string) => {
+  const content = await fs.promises.readFile(stationsPath, 'utf8');
+
   const allowedStationIds = new Set<string>();
   const stationLatitudeById = new Map<string, number>();
   const stationRows: StationRow[] = [];
 
-  const rl = readline.createInterface({
-    input: fs.createReadStream(stationsPath),
-    crlfDelay: Infinity,
-  });
-
-  for await (const line of rl) {
-    // Fixed-width format (see NOAA readme/ghcnd-stations.txt)
+  // ghcnd-stations.txt fixed width format:
+  // ID(11) LAT(9) LON(10) ELEV(7) STATE(2) NAME(30) GSN(3) HCN(3) WMO(5)
+  for (const line of content.split('\n')) {
     const id = line.slice(0, 11).trim();
     if (!id) continue;
 
-    const latitude = Number(line.slice(12, 20));
-    const longitude = Number(line.slice(21, 30));
+    const latitude = Number(line.slice(12, 20).trim());
+    const longitude = Number(line.slice(21, 30).trim());
     const elevationRaw = line.slice(31, 37).trim();
     const elevation = elevationRaw ? Number(elevationRaw) : null;
     const name = line.slice(41, 71).trim();
 
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
 
-    // Alle Stationen zunächst laden. Stationen ohne tatsächlich importierte Jahresaggregate
-    // werden nach dem Import wieder entfernt.
     allowedStationIds.add(id);
     stationLatitudeById.set(id, latitude);
 
     stationRows.push({
       id,
-      name,
+      name: name || id,
       latitude,
       longitude,
-      elevation: Number.isFinite(elevation as number) ? (elevation as number) : null,
-      // Temporäre Placeholder-Werte nur für den Insert-Pfad.
-      // Die echten Werte werden nach dem Aggregationsimport aus YearlyAggregate abgeleitet.
+      elevation: elevation !== null && Number.isFinite(elevation) ? elevation : null,
+      // placeholder, wird später aus YearlyAggregate reconciled
       firstYear: END_YEAR,
       lastYear: END_YEAR,
     });
   }
 
-  console.log(`[importer] loaded stations: ${stationRows.length}`);
   return { allowedStationIds, stationLatitudeById, stationRows };
 };
 
-const upsertStations = async (stationRows: StationRow[]) => {
-  const chunkSize = 1_000;
+const upsertStations = async (stations: StationRow[]) => {
+  // Upsert in Batches, sonst Postgres bind-variable Limit.
+  for (let i = 0; i < stations.length; i += STATION_UPSERT_CHUNK) {
+    const chunk = stations.slice(i, i + STATION_UPSERT_CHUNK);
 
-  for (let i = 0; i < stationRows.length; i += chunkSize) {
-    const chunk = stationRows.slice(i, i + chunkSize);
-
-    const values = Prisma.join(
-      chunk.map(
-        (s) =>
-          Prisma.sql`(${s.id}, ${s.name}, ${s.latitude}, ${s.longitude}, ${s.elevation}, ${s.firstYear}, ${s.lastYear}, ST_SetSRID(ST_MakePoint(${s.longitude}, ${s.latitude}),4326)::geography, FALSE)`,
-      ),
+    const values = chunk.map(
+      (s) => Prisma.sql`(${s.id}, ${s.name}, ${s.latitude}, ${s.longitude}, ${s.elevation}, ${s.firstYear}, ${s.lastYear},
+        ST_SetSRID(ST_MakePoint(${s.longitude}, ${s.latitude}), 4326)::geography, FALSE)`,
     );
 
     await prisma.$executeRaw(Prisma.sql`
       INSERT INTO "Station" ("id", "name", "latitude", "longitude", "elevation", "firstYear", "lastYear", "geom", "isSynthetic")
-      VALUES ${values}
-      ON CONFLICT ("id") DO UPDATE
-      SET
+      VALUES ${Prisma.join(values)}
+      ON CONFLICT ("id") DO UPDATE SET
         "name" = EXCLUDED."name",
         "latitude" = EXCLUDED."latitude",
         "longitude" = EXCLUDED."longitude",
         "elevation" = EXCLUDED."elevation",
-        "geom" = EXCLUDED."geom",
-        "isSynthetic" = FALSE;
+        "isSynthetic" = FALSE,
+        "geom" = COALESCE("Station"."geom", EXCLUDED."geom");
     `);
-  }
 
-  console.log('[importer] stations upserted');
+    console.log(`[importer] stations upserted chunk ${Math.floor(i / STATION_UPSERT_CHUNK) + 1}/${Math.ceil(stations.length / STATION_UPSERT_CHUNK)}`);
+  }
 };
 
+// Parse a GHCN-Daily .dly line and add monthly accumulators (TMIN/TMAX)
 const parseDlyLine = (line: string, monthly: Map<string, Accumulator>) => {
   const year = Number(line.slice(11, 15));
-  if (!Number.isFinite(year) || year > END_YEAR) return;
-
   const month = Number(line.slice(15, 17));
-  if (!Number.isFinite(month) || month < 1 || month > 12) return;
-
   const element = line.slice(17, 21);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return;
+  if (year > END_YEAR) return;
+
   if (element !== 'TMIN' && element !== 'TMAX') return;
 
   const monthKey = `${year}-${month}`;
   const monthAcc = monthly.get(monthKey) ?? { tminSum: 0, tminCount: 0, tmaxSum: 0, tmaxCount: 0 };
 
-  for (let dayIndex = 0; dayIndex < 31; dayIndex += 1) {
-    const base = 21 + dayIndex * 8;
-    const value = Number(line.slice(base, base + 5));
-    const mflag = line.slice(base + 5, base + 6);
-    const qflag = line.slice(base + 6, base + 7);
-    if (mflag.trim() || qflag.trim()) continue;
-    if (value === -9999) continue;
+  // 31 daily values blocks of 8 chars: VALUE(5) MFLAG(1) QFLAG(1) SFLAG(1)
+  for (let day = 0; day < 31; day += 1) {
+    const base = 21 + day * 8;
+    const valueStr = line.slice(base, base + 5);
+    const qflag = line.slice(base + 6, base + 7); // quality flag
+    const value = Number(valueStr);
 
-    const celsius = value / 10;
+    if (!Number.isFinite(value) || value === -9999) continue;
+    if (qflag && qflag.trim() !== '') continue;
+
+    // Convert from tenths of °C to °C
+    const valueC = value / 10;
 
     if (element === 'TMIN') {
-      monthAcc.tminSum += celsius;
+      monthAcc.tminSum += valueC;
       monthAcc.tminCount += 1;
     } else {
-      monthAcc.tmaxSum += celsius;
+      monthAcc.tmaxSum += valueC;
       monthAcc.tmaxCount += 1;
     }
   }
@@ -206,12 +198,18 @@ const flushAggregates = async (
   yearlyRows: Prisma.YearlyAggregateCreateManyInput[],
   seasonalRows: Prisma.SeasonalAggregateCreateManyInput[],
 ) => {
+  // Chunked createMany, um nicht in das Bind-Variable-Limit zu laufen (Prisma erzeugt Multi-Row INSERTs).
   if (yearlyRows.length) {
-    await prisma.yearlyAggregate.createMany({ data: yearlyRows, skipDuplicates: true });
+    for (let i = 0; i < yearlyRows.length; i += CREATE_MANY_CHUNK) {
+      await prisma.yearlyAggregate.createMany({ data: yearlyRows.slice(i, i + CREATE_MANY_CHUNK), skipDuplicates: true });
+    }
     yearlyRows.length = 0;
   }
+
   if (seasonalRows.length) {
-    await prisma.seasonalAggregate.createMany({ data: seasonalRows, skipDuplicates: true });
+    for (let i = 0; i < seasonalRows.length; i += CREATE_MANY_CHUNK) {
+      await prisma.seasonalAggregate.createMany({ data: seasonalRows.slice(i, i + CREATE_MANY_CHUNK), skipDuplicates: true });
+    }
     seasonalRows.length = 0;
   }
 };
@@ -301,11 +299,18 @@ const importDlyTar = async (
   let currentStation: string | null = null;
   let monthly: Map<string, Accumulator> = new Map();
 
-  // "best_effort" (gemäß Vorgabe):
-  // Periodenmittelwerte werden als arithmetisches Mittel aller verfügbaren und gültigen Tageswerte berechnet.
-  // Fehlende oder ungültige Tageswerte werden nicht mitgezählt.
-
-  type PeriodAgg = { tminSum: number; tminDays: number; tmaxSum: number; tmaxDays: number };
+  // Dozent-Logik:
+  // 1) Monatsmittel: arithmetisches Mittel gültiger Tageswerte (TMIN/TMAX getrennt), dann runden.
+  // 2) Jahresmittel: Mittelwert der gerundeten Monatsmittel / Anzahl vorhandener Monate.
+  // 3) Saisonmittel: Mittelwert der gerundeten Monatsmittel / Anzahl vorhandener Monate der Saison.
+  type PeriodAgg = {
+    tminMonthSum: number;
+    tminMonths: number;
+    tmaxMonthSum: number;
+    tmaxMonths: number;
+    tminDays: number;
+    tmaxDays: number;
+  };
 
   const commitStation = async () => {
     if (!currentStation) return;
@@ -322,28 +327,37 @@ const importDlyTar = async (
       const month = Number(monthStr);
       if (!Number.isFinite(year) || !Number.isFinite(month)) continue;
 
-      // --- Jahresaggregation (best_effort):
-      // arithmetisches Mittel aller verfügbaren und gültigen Tageswerte im Kalenderjahr
+      // Monatsmittel (Basis) + Rundung pro Monat
+      const tminMonthMean = acc.tminCount > 0 ? toFixedNumber(acc.tminSum / acc.tminCount) : null;
+      const tmaxMonthMean = acc.tmaxCount > 0 ? toFixedNumber(acc.tmaxSum / acc.tmaxCount) : null;
+
+      // --- Jahr (Kalenderjahr): Mittel der gerundeten Monatsmittel / vorhandene Monate
       const y =
         yearlyAgg.get(year) ??
         ({
-          tminSum: 0,
+          tminMonthSum: 0,
+          tminMonths: 0,
+          tmaxMonthSum: 0,
+          tmaxMonths: 0,
           tminDays: 0,
-          tmaxSum: 0,
           tmaxDays: 0,
         } satisfies PeriodAgg);
 
-      if (acc.tminCount > 0) {
-        y.tminSum += acc.tminSum;
-        y.tminDays += acc.tminCount;
+      if (tminMonthMean !== null) {
+        y.tminMonthSum += tminMonthMean;
+        y.tminMonths += 1;
       }
-      if (acc.tmaxCount > 0) {
-        y.tmaxSum += acc.tmaxSum;
-        y.tmaxDays += acc.tmaxCount;
+      if (tmaxMonthMean !== null) {
+        y.tmaxMonthSum += tmaxMonthMean;
+        y.tmaxMonths += 1;
       }
+
+      y.tminDays += acc.tminCount;
+      y.tmaxDays += acc.tmaxCount;
+
       yearlyAgg.set(year, y);
 
-      // --- Saisonaggregation (meteorologische Jahreszeiten; Winter über Jahreswechsel):
+      // --- Saison: Mittel der gerundeten Monatsmittel / vorhandene Saison-Monate
       const { season, seasonYear } = getSeasonForMonth(year, month, typeof latitude === 'number' ? { latitude } : undefined);
       const seasonKey = `${seasonYear}:${season}`;
 
@@ -352,29 +366,32 @@ const importDlyTar = async (
         ({
           year: seasonYear,
           season: season as PrismaSeason,
-          tminSum: 0,
+          tminMonthSum: 0,
+          tminMonths: 0,
+          tmaxMonthSum: 0,
+          tmaxMonths: 0,
           tminDays: 0,
-          tmaxSum: 0,
           tmaxDays: 0,
         } satisfies { year: number; season: PrismaSeason } & PeriodAgg);
 
-      if (acc.tminCount > 0) {
-        s.tminSum += acc.tminSum;
-        s.tminDays += acc.tminCount;
+      if (tminMonthMean !== null) {
+        s.tminMonthSum += tminMonthMean;
+        s.tminMonths += 1;
       }
-      if (acc.tmaxCount > 0) {
-        s.tmaxSum += acc.tmaxSum;
-        s.tmaxDays += acc.tmaxCount;
+      if (tmaxMonthMean !== null) {
+        s.tmaxMonthSum += tmaxMonthMean;
+        s.tmaxMonths += 1;
       }
+
+      s.tminDays += acc.tminCount;
+      s.tmaxDays += acc.tmaxCount;
 
       seasonalAgg.set(seasonKey, s);
     }
 
     for (const [year, agg] of yearlyAgg) {
-      const avgTminC = agg.tminDays > 0 ? toFixedNumber(agg.tminSum / agg.tminDays) : null;
-      const avgTmaxC = agg.tmaxDays > 0 ? toFixedNumber(agg.tmaxSum / agg.tmaxDays) : null;
-
-      // Periode ohne gültige Werte überspringen
+      const avgTminC = agg.tminMonths > 0 ? toFixedNumber(agg.tminMonthSum / agg.tminMonths) : null;
+      const avgTmaxC = agg.tmaxMonths > 0 ? toFixedNumber(agg.tmaxMonthSum / agg.tmaxMonths) : null;
       if (avgTminC === null && avgTmaxC === null) continue;
 
       yearlyRows.push({
@@ -388,13 +405,10 @@ const importDlyTar = async (
     }
 
     for (const [, agg] of seasonalAgg) {
-      // Keine Saisons jenseits des konfigurierten Datenhorizonts (z. B. "Winter 2026" nur wegen Dezember 2025).
       if (agg.year > END_YEAR) continue;
 
-      const avgTminC = agg.tminDays > 0 ? toFixedNumber(agg.tminSum / agg.tminDays) : null;
-      const avgTmaxC = agg.tmaxDays > 0 ? toFixedNumber(agg.tmaxSum / agg.tmaxDays) : null;
-
-      // Periode ohne gültige Werte überspringen
+      const avgTminC = agg.tminMonths > 0 ? toFixedNumber(agg.tminMonthSum / agg.tminMonths) : null;
+      const avgTmaxC = agg.tmaxMonths > 0 ? toFixedNumber(agg.tmaxMonthSum / agg.tmaxMonths) : null;
       if (avgTminC === null && avgTmaxC === null) continue;
 
       seasonalRows.push({
@@ -415,7 +429,6 @@ const importDlyTar = async (
   };
 
   for await (const line of rl) {
-    // tar header detection: GHCN dly files are concatenated; station id is first 11 chars
     const stationId = line.slice(0, 11).trim();
     if (!stationId) continue;
 
@@ -438,8 +451,6 @@ const runImport = async () => {
     return;
   }
 
-  // Lock and meta handling (idempotent)
-  // IMPORTANT: pg_advisory_lock expects bigint
   await prisma.$executeRaw`SELECT pg_advisory_lock(${BigInt(LOCK_KEY)})`;
   console.log('[importer] advisory lock acquired');
 
@@ -473,15 +484,12 @@ const runImport = async () => {
       update: { status: SeedImportStatus.RUNNING, endYear: END_YEAR, startedAt: new Date(), completedAt: null, error: null },
     });
 
-    // Download files (with cache)
     const stationsPath = await downloadWithCache('ghcnd-stations.txt');
     const tarGzPath = await downloadWithCache('ghcnd_all.tar.gz');
 
-    // Station metadata -> DB
     const { allowedStationIds, stationLatitudeById, stationRows } = await loadStations(stationsPath);
     await upsertStations(stationRows);
 
-    // Purge existing aggregates for NOAA stations (keep daily observations out for performance)
     await prisma.seasonalAggregate.deleteMany({ where: { station: { isSynthetic: false } } });
     await prisma.yearlyAggregate.deleteMany({ where: { station: { isSynthetic: false } } });
 
@@ -519,7 +527,6 @@ const runImport = async () => {
     });
     throw error;
   } finally {
-    // IMPORTANT: advisory_unlock returns void -> must use executeRaw (not queryRaw)
     await prisma.$executeRaw`SELECT pg_advisory_unlock(${BigInt(LOCK_KEY)})`;
     console.log('[importer] advisory lock released');
   }
