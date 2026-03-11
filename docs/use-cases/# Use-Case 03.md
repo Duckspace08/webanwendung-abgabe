@@ -1,8 +1,8 @@
 # Use‑Case 03: Stationsdaten anzeigen (grafisch + Tabelle) für Zeitraum
 
 ## Überblick
+Der Nutzer lässt sich die Temperaturdaten einer ausgewählten Wetterstation für einen bestimmten Zeitraum anzeigen. Das System lädt die voraggregierten Stationsdaten und stellt sie grafisch sowie tabellarisch dar. Datenlücken werden dabei sichtbar dargestellt.
 
-Der Nutzer lässt für eine ausgewählte Wetterstation Temperaturdaten für einen Zeitraum anzeigen. Das System lädt die Stationsdaten (voraggregiert) und stellt sie grafisch und tabellarisch dar. Datenlücken werden sichtbar dargestellt.
 
 ## Geltungsbereich
 
