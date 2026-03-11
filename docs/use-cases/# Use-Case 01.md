@@ -1,12 +1,11 @@
 # Use‑Case 01: Stationen im Umkreis finden
 
 ## Überblick
-
-Der Nutzer gibt geographische Koordinaten (Breite/Länge) sowie Filter (Suchradius, maximale Anzahl, Start‑/Endjahr) an. Das System ermittelt und zeigt die nächstgelegenen Wetterstationen innerhalb des Suchradius, die den Zeitraumfilter erfüllen, inklusive Distanz und Stationsidentifikation.
+Der Nutzer gibt geografische Koordinaten (Breite/Länge) sowie Filterkriterien wie Suchradius, maximale Anzahl und Start-/Endjahr an. Das System ermittelt die nächstgelegenen Wetterstationen innerhalb des Suchradius, die den Zeitraumfilter erfüllen, und zeigt sie inklusive Distanz und Stationsidentifikation an.
 
 ## Geltungsbereich
 
-Webanwendung zur Auswertung und Darstellung von Temperaturdaten auf Basis von GHCN‑Daten, ausgeführt in Client‑Server‑Architektur (Browser‑Client, Server im Docker‑Container).
+Es handelt sich um eine Webanwendung zur Auswertung und Darstellung von Temperaturdaten auf Basis von GHCN-Daten. Sie ist in einer Client-Server-Architektur ausgeführt (Browser-Client, Server im Docker-Container).
 
 ## Anwendungsschicht
 
