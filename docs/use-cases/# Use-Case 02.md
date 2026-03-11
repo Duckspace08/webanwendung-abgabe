@@ -1,12 +1,12 @@
 # Use‑Case 02: Station auswählen
 
 ## Überblick
+Der Nutzer wählt eine Wetterstation aus einer zuvor ermittelten Ergebnisliste (oder über die Karte) aus. Das System setzt die ausgewählte Station als „aktive Station“ und zeigt bzw. wertet die entsprechenden Stationsdaten aus.
 
-Der Nutzer wählt aus einer zuvor ermittelten Ergebnisliste (oder über die Karte) eine Wetterstation aus. Das System setzt die ausgewählte Station als „aktive Station“ für die weitere Anzeige/Auswertung der Stationsdaten.
 
 ## Geltungsbereich
 
-Webanwendung zur Auswertung und Darstellung von Temperaturdaten auf Basis von GHCN‑Daten, ausgeführt in Client‑Server‑Architektur (Browser‑Client, Server im Docker‑Container).
+Es handelt sich um eine Webanwendung zur Auswertung und Darstellung von Temperaturdaten auf Basis von GHCN-Daten. Sie ist in einer Client-Server-Architektur ausgeführt (Browser-Client, Server im Docker-Container).
 
 ## Anwendungsschicht
 
